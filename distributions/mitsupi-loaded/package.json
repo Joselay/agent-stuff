@@ -15,9 +15,7 @@
   ],
   "pi": {
     "extensions": [
-      "../../extensions/go-to-bed.ts",
       "../../extensions/goal.ts",
-      "node_modules/mitsupi/extensions/go-to-bed.ts",
       "node_modules/mitsupi/extensions/goal.ts"
     ],
     "skills": [

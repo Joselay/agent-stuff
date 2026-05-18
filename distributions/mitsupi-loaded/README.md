@@ -4,7 +4,6 @@ Add-on Mitsupi distribution.
 
 Includes only:
 
-- `extensions/go-to-bed.ts`
 - `extensions/goal.ts`
 - `skills/anachb`
 - `skills/apple-mail`
