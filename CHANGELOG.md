@@ -94,7 +94,7 @@ All notable changes to agent-stuff are documented here.
 ## 1.0.1
 
 * Added core extensions: /answer (Q&A), /review, /files, /reveal, /loop, and cwd history.
-* Added skills for Sentry, GitHub, web browsing, tmux, ghidra, pi-share, and Austrian transit APIs.
+* Added skills for Sentry, GitHub, web browsing, tmux, ghidra, and pi-share.
 * Added Pi themes including Night Owl and additional styling.
 * Added and refined the commit extension and review workflow.
 * Improved packaging and initial repository setup.

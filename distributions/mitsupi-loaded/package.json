@@ -19,13 +19,9 @@
       "node_modules/mitsupi/extensions/goal.ts"
     ],
     "skills": [
-      "../../skills/anachb",
       "../../skills/apple-mail",
-      "../../skills/oebb-scotty",
       "../../skills/openscad",
-      "node_modules/mitsupi/skills/anachb",
       "node_modules/mitsupi/skills/apple-mail",
-      "node_modules/mitsupi/skills/oebb-scotty",
       "node_modules/mitsupi/skills/openscad"
     ]
   },
