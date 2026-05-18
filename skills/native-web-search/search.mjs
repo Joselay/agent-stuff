@@ -312,7 +312,7 @@ function pickFastModel(provider, requestedModel, piAi) {
 		return { ...models[0], id: requestedModel };
 	}
 
-	const preferredIds = ["gpt-5.5-fast", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"];
+	const preferredIds = ["gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"];
 
 	for (const id of preferredIds) {
 		const found = models.find((m) => m.id === id);

@@ -32,7 +32,7 @@ const LOOP_PRESETS = [
 
 const LOOP_STATE_ENTRY = "loop-state";
 
-const SUMMARY_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.5-fast", "gpt-5.3-codex", "gpt-5.5"] as const;
+const SUMMARY_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"] as const;
 
 const SUMMARY_SYSTEM_PROMPT = `You summarize loop breakout conditions for a status widget.
 Return a concise phrase (max 6 words) that says when the loop should stop.

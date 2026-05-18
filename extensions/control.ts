@@ -155,7 +155,7 @@ interface SocketState {
 // Summarization
 // ============================================================================
 
-const SUMMARIZATION_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.5-fast", "gpt-5.3-codex", "gpt-5.5"] as const;
+const SUMMARIZATION_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"] as const;
 
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a conversation summarizer. Create concise, accurate summaries that preserve key information, decisions, and outcomes.`;
 

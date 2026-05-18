@@ -67,7 +67,7 @@ Example output:
   ]
 }`;
 
-const EXTRACTION_MODEL_IDS = ["gpt-5.5-fast", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"] as const;
+const EXTRACTION_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"] as const;
 
 /**
  * Prefer scoped OpenAI Codex models for extraction.
