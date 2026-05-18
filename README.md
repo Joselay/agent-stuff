@@ -17,7 +17,6 @@ All skills live in the [`skills`](skills) folder:
 * [`/librarian`](skills/librarian) - Cache and refresh remote git repositories in `~/.cache/checkouts`.
 * [`/mermaid`](skills/mermaid) - Create and validate Mermaid diagrams with Mermaid CLI tooling.
 * [`/native-web-search`](skills/native-web-search) - Trigger native web search with concise summaries and source URLs.
-* [`/openscad`](skills/openscad) - Create/render OpenSCAD models and export STL files.
 * [`/pi-share`](skills/pi-share) - Load and parse session transcripts from shittycodingagent.ai/buildwithpi/pi.dev URLs.
 * [`/sentry`](skills/sentry) - Fetch and analyze Sentry issues, events, transactions, and logs.
 * [`/summarize`](skills/summarize) - Convert files/URLs to Markdown via `uvx markitdown` and summarize.
@@ -56,8 +55,8 @@ Custom themes are in [`themes`](themes):
 
 This repo also contains distribution packages in [`distributions`](distributions):
 
-* [`mitsupi-common`](distributions/mitsupi-common) - Minimal/default set (all resources except `apple-mail`, `openscad`, and `goal`).
-* [`mitsupi-loaded`](distributions/mitsupi-loaded) - Add-on package that provides `apple-mail`, `openscad`, and `goal`.
+* [`mitsupi-common`](distributions/mitsupi-common) - Minimal/default set (all resources except `apple-mail` and `goal`).
+* [`mitsupi-loaded`](distributions/mitsupi-loaded) - Add-on package that provides `apple-mail` and `goal`.
 
 ## Plumbing Commands
 

@@ -1,7 +1,7 @@
 {
   "name": "mitsupi-loaded",
   "version": "1.5.0",
-  "description": "Add-on Mitsupi package with travel and CAD extras",
+  "description": "Add-on Mitsupi package with optional extras",
   "repository": {
     "type": "git",
     "url": "https://github.com/mitsuhiko/agent-stuff.git",
@@ -20,9 +20,7 @@
     ],
     "skills": [
       "../../skills/apple-mail",
-      "../../skills/openscad",
-      "node_modules/mitsupi/skills/apple-mail",
-      "node_modules/mitsupi/skills/openscad"
+      "node_modules/mitsupi/skills/apple-mail"
     ]
   },
   "dependencies": {
