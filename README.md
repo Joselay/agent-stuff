@@ -8,7 +8,6 @@ It is released on npm as `mitsupi` for use with the [Pi](https://buildwithpi.ai/
 
 All skills live in the [`skills`](skills) folder:
 
-* [`/apple-mail`](skills/apple-mail) - Search/read Apple Mail local storage and extract attachments.
 * [`/commit`](skills/commit) - Create git commits using concise Conventional Commits-style subjects.
 * [`/frontend-design`](skills/frontend-design) - Design and implement distinctive frontend interfaces.
 * [`/ghidra`](skills/ghidra) - Reverse engineer binaries using Ghidra's headless analyzer.
@@ -55,8 +54,8 @@ Custom themes are in [`themes`](themes):
 
 This repo also contains distribution packages in [`distributions`](distributions):
 
-* [`mitsupi-common`](distributions/mitsupi-common) - Minimal/default set (all resources except `apple-mail` and `goal`).
-* [`mitsupi-loaded`](distributions/mitsupi-loaded) - Add-on package that provides `apple-mail` and `goal`.
+* [`mitsupi-common`](distributions/mitsupi-common) - Minimal/default set (all resources except `goal`).
+* [`mitsupi-loaded`](distributions/mitsupi-loaded) - Add-on package that provides `goal`.
 
 ## Plumbing Commands
 

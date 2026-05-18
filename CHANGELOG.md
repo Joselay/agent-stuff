@@ -32,7 +32,7 @@ All notable changes to agent-stuff are documented here.
 
 * Added a prompt editor extension for managing prompt modes (create, rename, delete, and edit), with persistence and detection fixes.
 * Added a loop-fixing mode to `/review` with improved blocking-aware detection, plus branch/commit filtering and related review flow improvements. (#10)
-* Added new skills for native web search, cached repository checkout (`librarian`), Google Workspace, and Apple Mail.
+* Added new skills for native web search, cached repository checkout (`librarian`), and Google Workspace.
 * Added a CLI interface for session control and gated control tool registration behind `--session-control`.
 * Improved `/files` labels by appending git status information.
 * Improved `uv` command handling by blocking `py_compile` and suggesting AST-based syntax checks.

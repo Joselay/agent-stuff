@@ -1,7 +1,7 @@
 {
   "name": "mitsupi-loaded",
   "version": "1.5.0",
-  "description": "Add-on Mitsupi package with optional extras",
+  "description": "Add-on Mitsupi package with opt-in goal mode",
   "repository": {
     "type": "git",
     "url": "https://github.com/mitsuhiko/agent-stuff.git",
@@ -17,10 +17,6 @@
     "extensions": [
       "../../extensions/goal.ts",
       "node_modules/mitsupi/extensions/goal.ts"
-    ],
-    "skills": [
-      "../../skills/apple-mail",
-      "node_modules/mitsupi/skills/apple-mail"
     ]
   },
   "dependencies": {
