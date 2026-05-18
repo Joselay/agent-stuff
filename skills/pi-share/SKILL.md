@@ -63,7 +63,7 @@ The `--human-summary` flag generates a ~300 word summary focused on the human's 
 - What kind of interventions did they make? (corrections, clarifications, frustration)
 - How specific or vague were their instructions?
 
-This uses claude-haiku-4-5 via `pi -p` to analyze the condensed session transcript.
+This uses gpt-5.4-mini via `pi -p` to analyze the condensed session transcript.
 
 ## Session Data Structure
 

@@ -11,7 +11,7 @@
  *   --entries        Output entries as JSON lines (one per line)
  *   --system         Output the system prompt
  *   --tools          Output tool definitions
- *   --human-summary  Summarize what the human did in this session (uses haiku-4-5)
+ *   --human-summary  Summarize what the human did in this session (uses gpt-5.4-mini)
  *   --no-cache       Bypass cache and fetch fresh
  */
 
@@ -260,7 +260,7 @@ function formatForSummary(condensed) {
   return lines.join('\n');
 }
 
-// Generate human summary using haiku via pi
+// Generate human summary using gpt via pi
 async function generateHumanSummary(data) {
   const condensed = extractForSummary(data);
   const formatted = formatForSummary(condensed);
@@ -283,8 +283,8 @@ ${formatted}`;
 
   try {
     const result = spawnSync('pi', [
-      '--provider', 'anthropic',
-      '--model', 'claude-haiku-4-5',
+      '--provider', 'openai-codex',
+      '--model', 'gpt-5.4-mini',
       '--no-tools',
       '--no-session',
       '-p',
@@ -337,7 +337,7 @@ async function main() {
     } else if (flags.has('--tools')) {
       console.log(JSON.stringify(data.tools || []));
     } else if (flags.has('--human-summary')) {
-      // Generate human-centric summary using haiku
+      // Generate human-centric summary using gpt
       const summary = await generateHumanSummary(data);
       console.log(summary);
     } else {

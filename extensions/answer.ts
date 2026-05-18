@@ -67,35 +67,25 @@ Example output:
   ]
 }`;
 
-const CODEX_MODEL_ID = "gpt-5.3";
-const HAIKU_MODEL_ID = "claude-haiku-4-5";
+const EXTRACTION_MODEL_IDS = ["gpt-5.5-fast", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"] as const;
 
 /**
- * Prefer GPT-5.3 for extraction when available, otherwise fallback to haiku or the current model.
+ * Prefer scoped OpenAI Codex models for extraction.
  */
 async function selectExtractionModel(
 	currentModel: Model<Api>,
 	modelRegistry: ModelRegistry,
 ): Promise<Model<Api>> {
-	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
-	if (codexModel) {
-		const auth = await modelRegistry.getApiKeyAndHeaders(codexModel);
+	for (const modelId of EXTRACTION_MODEL_IDS) {
+		const model = modelRegistry.find("openai-codex", modelId);
+		if (!model) continue;
+		const auth = await modelRegistry.getApiKeyAndHeaders(model);
 		if (auth.ok) {
-			return codexModel;
+			return model;
 		}
 	}
 
-	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-	if (!haikuModel) {
-		return currentModel;
-	}
-
-	const auth = await modelRegistry.getApiKeyAndHeaders(haikuModel);
-	if (auth.ok === false) {
-		return currentModel;
-	}
-
-	return haikuModel;
+	return currentModel;
 }
 
 /**
@@ -447,7 +437,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Select the best model for extraction (prefer GPT-5.3, then haiku)
+			// Select the best model for extraction from configured OpenAI Codex models.
 			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
 
 			// Run extraction with loader UI

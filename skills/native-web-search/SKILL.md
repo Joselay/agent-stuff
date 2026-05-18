@@ -28,7 +28,7 @@ node search.mjs "vite 7 breaking changes" --purpose "prepare migration checklist
 
 Optional flags:
 
-- `--provider openai-codex|anthropic`
+- `--provider openai-codex`
 - `--model <model-id>`
 - `--timeout <ms>`
 - `--json`

@@ -69,7 +69,7 @@ function parseArgs(argv) {
 
 function usage() {
 	return `Usage:
-  node search.mjs "<query>" [--purpose "<why>"] [--provider openai-codex|anthropic] [--model <id>] [--json]
+  node search.mjs "<query>" [--purpose "<why>"] [--provider openai-codex] [--model <id>] [--json]
 
 Examples:
   node search.mjs "latest python release" --purpose "update dependency notes"
@@ -118,7 +118,6 @@ function getAgentDir() {
 function normalizeProvider(provider) {
 	if (!provider) return undefined;
 	const p = String(provider).toLowerCase().trim();
-	if (p.includes("anthropic") || p.includes("claude")) return "anthropic";
 	if (p.includes("codex") || p === "openai" || p.startsWith("openai")) return "openai-codex";
 	return undefined;
 }
@@ -131,9 +130,8 @@ function pickProvider(argProvider, settings, auth) {
 	if (fromSettings) return fromSettings;
 
 	if (auth?.["openai-codex"]) return "openai-codex";
-	if (auth?.anthropic) return "anthropic";
 
-	throw new Error("Could not determine provider. Pass --provider openai-codex|anthropic");
+	throw new Error("Could not determine provider. Pass --provider openai-codex");
 }
 
 function decodeJwtAccountId(jwt) {
@@ -305,8 +303,7 @@ function pickFastModel(provider, requestedModel, piAi) {
 	const models = typeof piAi.getModels === "function" ? piAi.getModels(provider) : [];
 	if (!Array.isArray(models) || models.length === 0) {
 		if (requestedModel) return { id: requestedModel, baseUrl: undefined };
-		if (provider === "openai-codex") return { id: "gpt-5.4-mini", baseUrl: "https://chatgpt.com/backend-api" };
-		return { id: "claude-haiku-4-5", baseUrl: "https://api.anthropic.com" };
+		return { id: "gpt-5.4-mini", baseUrl: "https://chatgpt.com/backend-api" };
 	}
 
 	if (requestedModel) {
@@ -315,17 +312,14 @@ function pickFastModel(provider, requestedModel, piAi) {
 		return { ...models[0], id: requestedModel };
 	}
 
-	const preferredIds =
-		provider === "openai-codex"
-			? ["gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.1", "gpt-5.1-codex-mini"]
-			: ["claude-haiku-4-5", "claude-3-5-haiku-latest", "claude-3-5-haiku-20241022"];
+	const preferredIds = ["gpt-5.5-fast", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.5"];
 
 	for (const id of preferredIds) {
 		const found = models.find((m) => m.id === id);
 		if (found) return found;
 	}
 
-	const heuristic = models.find((m) => /mini|haiku|spark|flash|fast/i.test(m.id));
+	const heuristic = models.find((m) => /mini|spark|flash|fast/i.test(m.id));
 	return heuristic || models[0];
 }
 
@@ -509,72 +503,6 @@ async function runCodexSearch({ model, apiKey, accountId, query, purpose, timeou
 	return finalText;
 }
 
-function buildAnthropicHeaders(apiKey) {
-	const oauthToken = typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-	if (oauthToken) {
-		return {
-			authorization: `Bearer ${apiKey}`,
-			"anthropic-version": "2023-06-01",
-			"anthropic-beta": "claude-code-20250219,oauth-2025-04-20,web-search-2025-03-05",
-			"content-type": "application/json",
-			accept: "application/json",
-			"x-app": "cli",
-			"user-agent": "claude-cli/1.0.72 (external, cli)",
-		};
-	}
-	return {
-		"x-api-key": apiKey,
-		"anthropic-version": "2023-06-01",
-		"anthropic-beta": "web-search-2025-03-05",
-		"content-type": "application/json",
-		accept: "application/json",
-	};
-}
-
-async function runAnthropicSearch({ model, apiKey, query, purpose, timeoutMs }) {
-	const body = {
-		model,
-		max_tokens: 1800,
-		temperature: 0,
-		system: buildSystemPrompt(),
-		tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
-		messages: [{ role: "user", content: buildUserPrompt(query, purpose) }],
-	};
-
-	const signal = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined;
-
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: buildAnthropicHeaders(apiKey),
-		body: JSON.stringify(body),
-		signal,
-	});
-
-	const payload = await res.text();
-	if (!res.ok) {
-		throw new Error(`Anthropic request failed (${res.status}): ${payload}`);
-	}
-
-	let parsed;
-	try {
-		parsed = JSON.parse(payload);
-	} catch {
-		throw new Error("Anthropic returned non-JSON response");
-	}
-
-	const text = (parsed.content || [])
-		.filter((item) => item.type === "text" && typeof item.text === "string")
-		.map((item) => item.text)
-		.join("\n\n")
-		.trim();
-
-	if (!text) {
-		throw new Error("Anthropic returned no text content");
-	}
-
-	return text;
-}
-
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.help || !args.query) {
@@ -593,24 +521,15 @@ async function main() {
 	const model = pickFastModel(provider, args.model, piAi);
 	const { apiKey, accountId } = await resolveApiKey(provider, auth, authPath, piAi);
 
-	const text =
-		provider === "openai-codex"
-			? await runCodexSearch({
-					model: model.id,
-					apiKey,
-					accountId,
-					query: args.query,
-					purpose: args.purpose,
-					timeoutMs: args.timeoutMs,
-					baseUrl: model.baseUrl,
-			  })
-			: await runAnthropicSearch({
-					model: model.id,
-					apiKey,
-					query: args.query,
-					purpose: args.purpose,
-					timeoutMs: args.timeoutMs,
-			  });
+	const text = await runCodexSearch({
+		model: model.id,
+		apiKey,
+		accountId,
+		query: args.query,
+		purpose: args.purpose,
+		timeoutMs: args.timeoutMs,
+		baseUrl: model.baseUrl,
+	});
 
 	if (args.json) {
 		console.log(
