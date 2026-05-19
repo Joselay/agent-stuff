@@ -9,12 +9,9 @@
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,
-	mkdtempSync,
 	readFileSync,
 	realpathSync,
 	statSync,
-	unlinkSync,
-	writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -604,7 +601,6 @@ const buildFileEntries = async (pi: ExtensionAPI, ctx: ExtensionContext): Promis
 type EditCheckResult = {
 	allowed: boolean;
 	reason?: string;
-	content?: string;
 };
 
 const getEditableContent = (target: FileEntry): EditCheckResult => {
@@ -626,7 +622,7 @@ const getEditableContent = (target: FileEntry): EditCheckResult => {
 		return { allowed: false, reason: "File contains null bytes" };
 	}
 
-	return { allowed: true, content: buffer.toString("utf8") };
+	return { allowed: true };
 };
 
 const showActionSelector = async (
@@ -634,7 +630,7 @@ const showActionSelector = async (
 	options: { canQuickLook: boolean; canEdit: boolean; canDiff: boolean },
 ): Promise<"reveal" | "quicklook" | "open" | "edit" | "addToPrompt" | "diff" | null> => {
 	const actions: SelectItem[] = [
-		...(options.canDiff ? [{ value: "diff", label: "Diff in VS Code" }] : []),
+		...(options.canDiff ? [{ value: "diff", label: "Diff" }] : []),
 		{ value: "reveal", label: "Reveal in Finder" },
 		{ value: "open", label: "Open" },
 		{ value: "addToPrompt", label: "Add to prompt" },
@@ -691,58 +687,67 @@ const openPath = async (pi: ExtensionAPI, ctx: ExtensionContext, target: FileEnt
 	}
 };
 
-const openExternalEditor = (tui: TUI, editorCmd: string, content: string): string | null => {
-	const tmpFile = path.join(os.tmpdir(), `pi-files-edit-${Date.now()}.txt`);
+type ExternalEditorResult = {
+	ok: boolean;
+	error?: string;
+};
+
+type ExternalEditorOptions = {
+	argsBeforeFiles?: string[];
+	cwd?: string;
+};
+
+const getEditorCommand = (): string => process.env.VISUAL || process.env.EDITOR || "nvim";
+
+const parseEditorCommand = (editorCmd: string): string[] => {
+	const parts = editorCmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+	return parts.map((part) => part.replace(/^(["'])(.*)\1$/, "$2"));
+};
+
+const openExternalEditor = (tui: TUI, editorCmd: string, filePaths: string[], options: ExternalEditorOptions = {}): ExternalEditorResult => {
+	const [editor, ...editorArgs] = parseEditorCommand(editorCmd);
+	if (!editor) {
+		return { ok: false, error: "No editor command configured" };
+	}
 
 	try {
-		writeFileSync(tmpFile, content, "utf8");
 		tui.stop();
 
-		const [editor, ...editorArgs] = editorCmd.split(" ");
-		const result = spawnSync(editor, [...editorArgs, tmpFile], { stdio: "inherit" });
+		const result = spawnSync(editor, [...editorArgs, ...(options.argsBeforeFiles ?? []), ...filePaths], {
+			cwd: options.cwd,
+			stdio: "inherit",
+		});
 
 		if (result.status === 0) {
-			return readFileSync(tmpFile, "utf8").replace(/\n$/, "");
+			return { ok: true };
 		}
 
-		return null;
+		return {
+			ok: false,
+			error: result.error?.message ?? `Editor exited with status ${result.status ?? "unknown"}`,
+		};
 	} finally {
-		try {
-			unlinkSync(tmpFile);
-		} catch {
-		}
 		tui.start();
 		tui.requestRender(true);
 	}
 };
 
-const editPath = async (ctx: ExtensionContext, target: FileEntry, content: string): Promise<void> => {
-	const editorCmd = process.env.VISUAL || process.env.EDITOR;
-	if (!editorCmd) {
-		ctx.ui.notify("No editor configured. Set $VISUAL or $EDITOR.", "warning");
-		return;
-	}
+const editPath = async (ctx: ExtensionContext, target: FileEntry): Promise<void> => {
+	const editorCmd = getEditorCommand();
 
-	const updated = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const status = new Text(theme.fg("dim", `Opening ${editorCmd}...`));
+	const editResult = await ctx.ui.custom<ExternalEditorResult>((tui, theme, _kb, done) => {
+		const status = new Text(theme.fg("dim", `Opening ${editorCmd} on ${target.displayPath}...`));
 
 		queueMicrotask(() => {
-			const result = openExternalEditor(tui, editorCmd, content);
+			const result = openExternalEditor(tui, editorCmd, [target.resolvedPath]);
 			done(result);
 		});
 
 		return status;
 	});
 
-	if (updated === null) {
-		ctx.ui.notify("Edit cancelled", "info");
-		return;
-	}
-
-	try {
-		writeFileSync(target.resolvedPath, updated, "utf8");
-	} catch {
-		ctx.ui.notify(`Failed to save ${target.displayPath}`, "error");
+	if (!editResult.ok) {
+		ctx.ui.notify(editResult.error ?? "Edit cancelled", "warning");
 	}
 };
 
@@ -794,39 +799,49 @@ const quickLookPath = async (pi: ExtensionAPI, ctx: ExtensionContext, target: Fi
 	}
 };
 
-const openDiff = async (pi: ExtensionAPI, ctx: ExtensionContext, target: FileEntry, gitRoot: string | null): Promise<void> => {
+const quoteLuaString = (value: string): string =>
+	`"${value
+		.replace(/\\/g, "\\\\")
+		.replace(/"/g, '\\"')
+		.replace(/\n/g, "\\n")
+		.replace(/\r/g, "\\r")
+		.replace(/\t/g, "\\t")}"`;
+
+const buildDiffviewCommand = (relativePath: string): string => {
+	const luaPath = quoteLuaString(relativePath);
+	return [
+		"lua",
+		`local p = ${luaPath};`,
+		'vim.cmd("DiffviewOpen HEAD --selected-file=" .. vim.fn.fnameescape(p) .. " -- " .. vim.fn.fnameescape(p))',
+	].join(" ");
+};
+
+const openDiff = async (_pi: ExtensionAPI, ctx: ExtensionContext, target: FileEntry, gitRoot: string | null): Promise<void> => {
 	if (!gitRoot) {
 		ctx.ui.notify("Git repository not found", "warning");
 		return;
 	}
 
 	const relativePath = path.relative(gitRoot, target.resolvedPath).split(path.sep).join("/");
-	const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pi-files-"));
-	const tmpFile = path.join(tmpDir, path.basename(target.displayPath));
+	const diffviewCommand = buildDiffviewCommand(relativePath);
 
-	const existsInHead = await pi.exec("git", ["cat-file", "-e", `HEAD:${relativePath}`], { cwd: gitRoot });
-	if (existsInHead.code === 0) {
-		const result = await pi.exec("git", ["show", `HEAD:${relativePath}`], { cwd: gitRoot });
-		if (result.code !== 0) {
-			const errorMessage = result.stderr?.trim() || `Failed to diff ${target.displayPath}`;
-			ctx.ui.notify(errorMessage, "error");
-			return;
-		}
-		writeFileSync(tmpFile, result.stdout ?? "", "utf8");
-	} else {
-		writeFileSync(tmpFile, "", "utf8");
-	}
+	const editorCmd = getEditorCommand();
+	const diffResult = await ctx.ui.custom<ExternalEditorResult>((tui, theme, _kb, done) => {
+		const status = new Text(theme.fg("dim", `Opening ${editorCmd} Diffview for ${target.displayPath}...`));
 
-	let workingPath = target.resolvedPath;
-	if (!existsSync(target.resolvedPath)) {
-		workingPath = path.join(tmpDir, `pi-files-working-${path.basename(target.displayPath)}`);
-		writeFileSync(workingPath, "", "utf8");
-	}
+		queueMicrotask(() => {
+			const result = openExternalEditor(tui, editorCmd, [], {
+				argsBeforeFiles: ["-c", diffviewCommand],
+				cwd: gitRoot,
+			});
+			done(result);
+		});
 
-	const openResult = await pi.exec("code", ["--diff", tmpFile, workingPath], { cwd: gitRoot });
-	if (openResult.code !== 0) {
-		const errorMessage = openResult.stderr?.trim() || `Failed to open diff for ${target.displayPath}`;
-		ctx.ui.notify(errorMessage, "error");
+		return status;
+	});
+
+	if (!diffResult.ok) {
+		ctx.ui.notify(diffResult.error ?? `Failed to open diff for ${target.displayPath}`, "error");
 	}
 };
 
@@ -1010,11 +1025,11 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 				await openPath(pi, ctx, selected);
 				break;
 			case "edit":
-				if (!editCheck.allowed || editCheck.content === undefined) {
+				if (!editCheck.allowed) {
 					ctx.ui.notify(editCheck.reason ?? "File cannot be edited", "warning");
 					break;
 				}
-				await editPath(ctx, selected, editCheck.content);
+				await editPath(ctx, selected);
 				break;
 			case "addToPrompt":
 				addFileToPrompt(ctx, selected);
