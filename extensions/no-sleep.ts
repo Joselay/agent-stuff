@@ -1,8 +1,9 @@
 /**
  * Prevent macOS from sleeping while pi's agent is running.
  *
- * Uses caffeinate(8). No footer/status UI is rendered; this only emits chat
- * notifications when sleep prevention is acquired or released.
+ * Uses caffeinate(8). No footer/status UI is rendered, and no chat
+ * notifications are emitted for routine caffeination state changes.
+ * Error/warning notifications are still surfaced.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -63,12 +64,6 @@ function start(ctx?: ExtensionContext): void {
 	child.unref();
 	caffeinate = child;
 
-	child.once("spawn", () => {
-		if (caffeinate === child) {
-			notify(ctx, "No Sleep: caffeinated; macOS sleep prevention is active.");
-		}
-	});
-
 	child.once("error", (error) => {
 		if (caffeinate !== child) {
 			return;
@@ -111,8 +106,6 @@ function stop(ctx?: ExtensionContext): void {
 		}, 1_000);
 		timer.unref?.();
 	}
-
-	notify(ctx, "No Sleep: uncaffeinated; macOS sleep prevention is released.");
 }
 
 function reconcile(ctx?: ExtensionContext): void {
