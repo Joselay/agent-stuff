@@ -21,8 +21,6 @@ Prompt commands live in [`commands`](commands):
 
 Skills live in [`skills`](skills). Each skill has a `SKILL.md` plus any helper scripts it needs.
 
-- [`/anachb`](skills/anachb) - Query Austrian public transport via VOR AnachB: station search, real-time departures, routes, and disruptions.
-- [`/apple-mail`](skills/apple-mail) - Search and read Apple Mail's local storage, including raw messages and attachment extraction.
 - [`/commit`](skills/commit) - Guidance for making concise git commits with good subjects and bodies.
 - [`/frontend-design`](skills/frontend-design) - Create distinctive, production-ready frontend UI with strong visual direction.
 - [`/ghidra`](skills/ghidra) - Run Ghidra headless analysis for binaries, functions, strings, symbols, call graphs, and decompilation.
@@ -30,8 +28,6 @@ Skills live in [`skills`](skills). Each skill has a `SKILL.md` plus any helper s
 - [`/google-workspace`](skills/google-workspace) - Access Drive, Docs, Calendar, Gmail, Sheets, Slides, Chat, and People APIs through local helper scripts.
 - [`/librarian`](skills/librarian) - Cache and refresh remote git repositories under `~/.cache/checkouts/<host>/<org>/<repo>`.
 - [`/native-web-search`](skills/native-web-search) - Trigger native web search with concise summaries and source URLs.
-- [`/oebb-scotty`](skills/oebb-scotty) - Plan Austrian rail journeys and check ÖBB Scotty station departures, arrivals, trips, and disruptions.
-- [`/openscad`](skills/openscad) - Create/render OpenSCAD models, preview angles, extract parameters, validate syntax, and export STL files.
 - [`/pi-share`](skills/pi-share) - Fetch and parse shared Pi session transcripts from pi-share URLs.
 - [`/sentry`](skills/sentry) - Fetch and analyze Sentry issues, events, transactions, and logs.
 - [`/summarize`](skills/summarize) - Convert URLs or local documents to Markdown with `uvx markitdown`, optionally summarizing them.
