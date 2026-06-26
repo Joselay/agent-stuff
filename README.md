@@ -26,6 +26,7 @@ Skills live in [`skills`](skills). Each skill has a `SKILL.md` plus any helper s
 - [`/ghidra`](skills/ghidra) - Run Ghidra headless analysis for binaries, functions, strings, symbols, call graphs, and decompilation.
 - [`/github`](skills/github) - Use the `gh` CLI for GitHub issues, pull requests, runs, and API queries.
 - [`/google-workspace`](skills/google-workspace) - Access Drive, Docs, Calendar, Gmail, Sheets, Slides, Chat, and People APIs through local helper scripts.
+- [`/imagegen`](skills/imagegen) - Pi image generation/editing workflow.
 - [`/librarian`](skills/librarian) - Cache and refresh remote git repositories under `~/.cache/checkouts/<host>/<org>/<repo>`.
 - [`/native-web-search`](skills/native-web-search) - Trigger native web search with concise summaries and source URLs.
 - [`/pi-share`](skills/pi-share) - Fetch and parse shared Pi session transcripts from pi-share URLs.
@@ -45,6 +46,7 @@ Pi extensions live in [`extensions`](extensions):
 - [`control.ts`](extensions/control.ts) - Session control sockets, `/control-sessions`, and the `send_to_session` / `list_sessions` tools for communicating with other live Pi sessions.
 - [`files.ts`](extensions/files.ts) - `/files` browser with git status and session references, plus shortcuts to browse, reveal, and Quick Look referenced files.
 - [`goal.ts`](extensions/goal.ts) - `/goal` long-running objective mode with automatic continuation and the `get_goal`, `create_goal`, and `update_goal` tools.
+- [`imagegen.ts`](extensions/imagegen.ts) - `imagegen` tool for image generation through Pi `auth.json`.
 - [`multi-edit.ts`](extensions/multi-edit.ts) - Enhanced `edit` tool supporting single edits, batch `multi` edits, and Codex-style patches with preflight validation.
 - [`no-sleep.ts`](extensions/no-sleep.ts) - `/no-sleep` macOS `caffeinate` integration to prevent sleep while an agent or session is active.
 - [`notify.ts`](extensions/notify.ts) - Native terminal desktop notification when the agent finishes and is ready for input.
