@@ -1,0 +1,16 @@
+auth.json
+models-store.json
+settings.json
+trust.json
+sessions/
+bin/
+
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+*.log
+tmp/
+temp/
