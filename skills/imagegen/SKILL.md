@@ -1,28 +1,29 @@
 ---
 name: imagegen
-description: "Generate or edit raster images with AI when the deliverable is a bitmap: photos, illustrations, textures, sprites, mockups, transparent cutouts, or reference-guided variants. Not for visuals better built as repo-native SVG/vector or HTML/CSS/canvas, such as extending an existing icon or logo system."
+description: "Generate and edit AI raster images—photos, illustrations, textures, sprites, mockups, transparent cutouts, and reference-guided variants—when the deliverable is a bitmap. Route repo-native SVG/vector, existing-system icons or logos, and HTML/CSS/canvas visuals to native code instead."
 ---
 
 # Image Generation Skill
 
-All image generation and editing goes through `scripts/imagegen.mjs`. Generate directly without reconfirmation unless a required input image is missing or unreadable.
+Route every AI raster generation and edit through `scripts/imagegen.mjs`. Proceed without reconfirmation once all required inputs are readable.
 
 ## Rules
 
-- OAuth is the only credential. If it is unavailable or the helper reports an auth error, ask the user to run `/login`. Never fall back to an API key, alternate provider, or one-off SDK runner, and never read or expose authentication storage.
-- The helper's request shape and model pin match the upstream built-in `image_gen` tool: `model: "gpt-image-2"`, `background`/`quality`/`size` all `"auto"`, no `n` (one result), up to five input images, always high-fidelity inputs. These controls are fixed — do not expose them to callers or modify `scripts/imagegen.mjs` during an image task. If a needed capability is unavailable, explain the limitation.
-- Use Python only for local post-processing such as chroma-key removal, never as a substitute for generative editing. Run Python helpers with `uv run --with Pillow`.
+- OAuth is the only credential. On an auth failure, ask the user to run `/login`. Leave authentication storage untouched and undisclosed; use no API key, alternate provider, or one-off SDK runner.
+- The helper is pinned to the upstream built-in `image_gen` request shape: `model: "gpt-image-2"`, `background`/`quality`/`size` set to `"auto"`, one result, up to five high-fidelity input images. Treat these controls and `scripts/imagegen.mjs` as fixed during image tasks; explain unavailable capabilities.
+- Reserve Python for local post-processing such as chroma-key removal. Run Python helpers with `uv run --with Pillow`; perform generative edits through `imagegen.mjs`.
 - Issue one tailored helper call per requested asset or variant, with a distinct prompt per deliverable.
-- Deliver a generated bitmap for raster-style requests (photo, sprite, banner, product image), never an SVG/HTML/CSS placeholder.
+- Return the generated bitmap for every raster request.
 
 ## Workflow
 
-1. Classify intent: **edit** when the user wants an existing image changed while parts of it are preserved; **generate** when they provide no images or the images are only style/composition/mood references. Default to generate.
-2. Collect inputs: prompt(s), exact text (verbatim), constraints, input images. Inspect every input image with `read` and label it by index and role (`Image 1: edit target; Image 2: style reference`). A filename mentioned in the prompt is not attached — pass it with `--input`. If a required image is unreadable, ask the user to re-attach it; a requested reference must be present before generating.
-3. Build the prompt with the shared schema below: pick a use-case slug, follow the specificity policy in `references/prompting.md` (normalize detailed prompts; augment generic ones only where it materially helps), and for edits list invariants explicitly (`change only X; keep Y unchanged`).
+1. Classify each deliverable as **edit** when an existing image must change while preserving parts of it; classify images used only for style, composition, or mood as references to a **generate** request. Default to generate. Finish when every deliverable has one classification.
+2. Collect prompt(s), verbatim text, constraints, and input images. Inspect every input with `read`, then assign its index and role (`Image 1: edit target; Image 2: style reference`). A mentioned filename becomes an input only when passed with `--input`. Finish when every required input is present, readable, and assigned exactly one role; otherwise ask for the missing attachment.
+3. Before every helper call, load `references/prompting.md` and turn the request into its prescribed creative brief. For edits, state the change and all invariants explicitly (`change only X; keep Y unchanged`). Finish when every user requirement is accounted for in the brief.
 4. Run the helper. Use `--prompt-file` for long prompts, `--input` once per input image, and at least a 180-second timeout.
-5. Inspect every output with `read` and validate subject, style, composition, text accuracy, and invariants. Iterate one targeted change at a time, restating invariants each round.
-6. Save per the save-path policy, update any consuming code for project-bound assets, and report the final path(s) and final prompt(s).
+5. Inspect every output with `read`. Check every requested subject, style, composition, text, and edit invariant. If any check fails, make one targeted revision per call and restate all invariants. Finish when every requirement visibly passes or a model limitation is identified for the user.
+6. Apply the save-path policy and update all consuming code for project-bound assets. Finish when every selected bitmap has a stable destination and every project reference resolves to it.
+7. Report final path(s), prompt(s), and any unresolved limitation.
 
 ## Helper
 
@@ -50,32 +51,9 @@ The helper prints the saved path under `~/.pi/generated_images/`.
 - When copying, leave the original in place unless the user explicitly asks to delete it.
 - Save as a sibling versioned filename (`hero-v2.png`, `item-icon-edited.png`); overwrite an existing asset only when the user explicitly asks for replacement.
 
-## Shared prompt schema
-
-```text
-Use case: <taxonomy slug>
-Asset type: <where the asset will be used>
-Primary request: <user's main prompt>
-Input images: <Image 1: role; Image 2: role> (optional)
-Scene/backdrop: <environment>
-Subject: <main subject>
-Style/medium: <photo/illustration/3D/etc>
-Composition/framing: <wide/close/top-down; placement>
-Lighting/mood: <lighting + mood>
-Color palette: <palette notes>
-Materials/textures: <surface details>
-Text (verbatim): "<exact text>"
-Constraints: <must keep/must avoid>
-Avoid: <negative constraints>
-```
-
-Use only the lines that help; `Asset type`, `Input images`, and `Scene/backdrop` are prompt scaffolding, not helper flags or request controls. If a critical detail is missing and blocks success, ask; otherwise proceed.
-
-Use-case slugs — generate: `photorealistic-natural`, `product-mockup`, `ui-mockup`, `infographic-diagram`, `scientific-educational`, `ads-marketing`, `productivity-visual`, `logo-brand`, `illustration-story`, `stylized-concept`, `historical-scene`. Edit: `text-localization`, `identity-preserve`, `precise-object-edit`, `lighting-weather`, `background-extraction`, `style-transfer`, `compositing`, `sketch-to-render`. Per-slug tips live in `references/prompting.md`.
-
 ## Transparent images
 
-For a transparent background, cutout, or alpha PNG, follow `references/transparency.md` before generating: chroma-key generation prompt, local key-to-alpha conversion, validation, and known-imperfect materials.
+For every transparent background, cutout, or alpha PNG request, load and complete `references/transparency.md`: chroma-key generation, local key-to-alpha conversion, and alpha validation.
 
 ## References
 

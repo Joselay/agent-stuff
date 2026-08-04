@@ -1,5 +1,26 @@
 # Prompting best practices
 
+Before each helper call, choose the matching generate/edit slug under **Use-case tips** and write a creative brief using only useful fields:
+
+```text
+Use case: <taxonomy slug>
+Asset type: <where the asset will be used>
+Primary request: <user's main prompt>
+Input images: <Image 1: role; Image 2: role>
+Scene/backdrop: <environment>
+Subject: <main subject>
+Style/medium: <photo/illustration/3D/etc>
+Composition/framing: <wide/close/top-down; placement>
+Lighting/mood: <lighting + mood>
+Color palette: <palette notes>
+Materials/textures: <surface details>
+Text (verbatim): "<exact text>"
+Constraints: <must keep or avoid>
+Avoid: <negative constraints>
+```
+
+`Asset type`, `Input images`, and `Scene/backdrop` are prompt fields, not helper flags. Ask only when a missing critical detail blocks success.
+
 ## Specificity policy
 - If the user prompt is already specific and detailed, normalize it into a clean spec without adding creative requirements.
 - If the prompt is generic, you may add tasteful detail when it materially improves the output.
