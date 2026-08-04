@@ -1,26 +1,26 @@
 ---
 name: uv
-description: "uv Python tooling: use for Python execution, ephemeral CLI tools, project dependencies or environments, Python versions, standalone scripts, and package builds."
+description: "uv Python tooling: use when running Python, invoking ephemeral CLIs, managing project dependencies or environments, selecting Python versions, maintaining standalone scripts, or building packages."
 ---
 
 # uv
 
-Route by lifetime:
+Route by ownership:
 
 ```bash
-uv run <command>                         # Project-owned command
-uv run python <args>                     # Python in the project environment
-uvx <tool> [args]                        # Ephemeral CLI, isolated from the project
-uv add <package>                         # Runtime dependency
-uv add --dev <package>                   # Development dependency
-uv remove <package>                      # Remove dependency and relock
-uv sync                                  # Reconcile environment and lockfile
-uv sync --locked                         # Reconcile while requiring a current lockfile
-uv python install <version>              # Install an interpreter
-uv python pin <version>                  # Pin the project interpreter
+uv run <command>             # Project-owned command
+uv run python <args>         # Python in the project environment
+uvx <tool> [args]            # Ephemeral CLI, isolated from the project
+uv add <package>             # Runtime dependency
+uv add --dev <package>       # Development dependency
+uv remove <package>          # Remove dependency and relock
+uv sync                      # Reconcile environment and lockfile
+uv sync --locked             # Sync only when the lockfile is current
+uv python install <version>  # Install an interpreter
+uv python pin <version>      # Pin the project interpreter
 ```
 
-Use `uv run`, rather than `uvx`, for tools declared by the project. Use `uv add` and `uv remove`, rather than editing dependency tables directly, so `pyproject.toml`, `uv.lock`, and the environment move together.
+Project-owned tools run with `uv run`; ephemeral tools run with `uvx`. Project dependencies change with `uv add` or `uv remove`, keeping `pyproject.toml`, `uv.lock`, and the environment together.
 
 For a syntax-only check that creates no `__pycache__`:
 
