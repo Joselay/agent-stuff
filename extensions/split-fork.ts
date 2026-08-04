@@ -1,16 +1,7 @@
-import {
-	type ExtensionAPI,
-	type ExtensionContext,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import { existsSync } from "node:fs";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { existsSync, promises as fs } from "node:fs";
 import * as path from "node:path";
-
-type NotifyLevel = "info" | "warning" | "error";
-
-function notify(ctx: ExtensionContext, message: string, level: NotifyLevel = "info"): void {
-	if (ctx.hasUI) ctx.ui.notify(message, level);
-}
+import { randomUUID } from "node:crypto";
 
 const GHOSTTY_SPLIT_SCRIPT = `on run argv
 	set targetCwd to item 1 of argv
@@ -62,69 +53,77 @@ function buildPiStartupInput(sessionFile: string | undefined, prompt: string): s
 	}
 
 	if (prompt.length > 0) {
-		commandParts.push(prompt);
+		commandParts.push("--", prompt);
 	}
 
 	return `${commandParts.map(shellQuote).join(" ")}\n`;
 }
 
-function createForkSession(ctx: ExtensionContext): string | undefined {
+async function createForkedSession(ctx: ExtensionCommandContext): Promise<string | undefined> {
 	const sessionFile = ctx.sessionManager.getSessionFile();
-	const leafId = ctx.sessionManager.getLeafId();
-	if (!sessionFile || !leafId || !existsSync(sessionFile)) return undefined;
+	if (!sessionFile) {
+		return undefined;
+	}
 
-	// Use a separate manager: createBranchedSession mutates its receiver.
-	const source = SessionManager.open(sessionFile, ctx.sessionManager.getSessionDir(), ctx.cwd);
-	return source.createBranchedSession(leafId);
+	const sessionDir = path.dirname(sessionFile);
+	const branchEntries = ctx.sessionManager.getBranch();
+	const currentHeader = ctx.sessionManager.getHeader();
+
+	const timestamp = new Date().toISOString();
+	const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+	const newSessionId = randomUUID();
+	const newSessionFile = path.join(sessionDir, `${fileTimestamp}_${newSessionId}.jsonl`);
+
+	const newHeader = {
+		type: "session",
+		version: currentHeader?.version ?? 3,
+		id: newSessionId,
+		timestamp,
+		cwd: currentHeader?.cwd ?? ctx.cwd,
+		parentSession: sessionFile,
+	};
+
+	const lines = [JSON.stringify(newHeader), ...branchEntries.map((entry) => JSON.stringify(entry))].join("\n") + "\n";
+
+	await fs.mkdir(sessionDir, { recursive: true });
+	await fs.writeFile(newSessionFile, lines, "utf8");
+
+	return newSessionFile;
 }
 
 export default function (pi: ExtensionAPI): void {
 	pi.registerCommand("split-fork", {
-		description: "Fork this session into a new Ghostty split, optionally with a prompt",
+		description: "Fork this session into a new pi process in a right-hand Ghostty split. Usage: /split-fork [optional prompt]",
 		handler: async (args, ctx) => {
-			if (ctx.mode !== "tui") {
-				notify(ctx, "/split-fork requires interactive TUI mode.", "warning");
-				return;
-			}
-
 			if (process.platform !== "darwin") {
-				notify(ctx, "/split-fork currently requires macOS (Ghostty AppleScript).", "warning");
+				ctx.ui.notify("/split-fork currently requires macOS (Ghostty AppleScript).", "warning");
 				return;
 			}
 
 			const wasBusy = !ctx.isIdle();
 			const prompt = args.trim();
-			let forkSessionFile: string | undefined;
-			try {
-				forkSessionFile = createForkSession(ctx);
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				notify(ctx, `Failed to fork session: ${reason}`, "error");
-				return;
-			}
-			const startupInput = buildPiStartupInput(forkSessionFile, prompt);
+			const forkedSessionFile = await createForkedSession(ctx);
+			const startupInput = buildPiStartupInput(forkedSessionFile, prompt);
 
-			const result = await pi.exec("osascript", ["-e", GHOSTTY_SPLIT_SCRIPT, "--", ctx.cwd, startupInput], {
-				timeout: 10_000,
-			});
+			const result = await pi.exec("osascript", ["-e", GHOSTTY_SPLIT_SCRIPT, "--", ctx.cwd, startupInput]);
 			if (result.code !== 0) {
 				const reason = result.stderr?.trim() || result.stdout?.trim() || "unknown osascript error";
-				notify(ctx, `Failed to launch Ghostty split: ${reason}`, "error");
-				if (forkSessionFile) {
-					notify(ctx, `Forked session was created: ${forkSessionFile}`, "info");
+				ctx.ui.notify(`Failed to launch Ghostty split: ${reason}`, "error");
+				if (forkedSessionFile) {
+					ctx.ui.notify(`Forked session was created: ${forkedSessionFile}`, "info");
 				}
 				return;
 			}
 
-			if (forkSessionFile) {
-				const fileName = path.basename(forkSessionFile);
+			if (forkedSessionFile) {
+				const fileName = path.basename(forkedSessionFile);
 				const suffix = prompt ? " and sent prompt" : "";
-				notify(ctx, `Forked to ${fileName} in a new Ghostty split${suffix}.`, "info");
+				ctx.ui.notify(`Forked to ${fileName} in a new Ghostty split${suffix}.`, "info");
 				if (wasBusy) {
-					notify(ctx, "Forked from current committed state (in-flight turn continues in original session).", "info");
+					ctx.ui.notify("Forked from current committed state (in-flight turn continues in original session).", "info");
 				}
 			} else {
-				notify(ctx, "Opened a new Ghostty split (no persisted session to fork).", "warning");
+				ctx.ui.notify("Opened a new Ghostty split (no persisted session to fork).", "warning");
 			}
 		},
 	});
