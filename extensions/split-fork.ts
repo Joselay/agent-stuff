@@ -68,7 +68,7 @@ function buildPiStartupInput(sessionFile: string | undefined, prompt: string): s
 	return `${commandParts.map(shellQuote).join(" ")}\n`;
 }
 
-function createSplitSession(ctx: ExtensionContext): string | undefined {
+function createForkSession(ctx: ExtensionContext): string | undefined {
 	const sessionFile = ctx.sessionManager.getSessionFile();
 	const leafId = ctx.sessionManager.getLeafId();
 	if (!sessionFile || !leafId || !existsSync(sessionFile)) return undefined;
@@ -79,30 +79,30 @@ function createSplitSession(ctx: ExtensionContext): string | undefined {
 }
 
 export default function (pi: ExtensionAPI): void {
-	pi.registerCommand("split", {
-		description: "Duplicate this session into a new Ghostty split, optionally with a prompt",
+	pi.registerCommand("split-fork", {
+		description: "Fork this session into a new Ghostty split, optionally with a prompt",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") {
-				notify(ctx, "/split requires interactive TUI mode.", "warning");
+				notify(ctx, "/split-fork requires interactive TUI mode.", "warning");
 				return;
 			}
 
 			if (process.platform !== "darwin") {
-				notify(ctx, "/split currently requires macOS (Ghostty AppleScript).", "warning");
+				notify(ctx, "/split-fork currently requires macOS (Ghostty AppleScript).", "warning");
 				return;
 			}
 
 			const wasBusy = !ctx.isIdle();
 			const prompt = args.trim();
-			let splitSessionFile: string | undefined;
+			let forkSessionFile: string | undefined;
 			try {
-				splitSessionFile = createSplitSession(ctx);
+				forkSessionFile = createForkSession(ctx);
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
-				notify(ctx, `Failed to duplicate session: ${reason}`, "error");
+				notify(ctx, `Failed to fork session: ${reason}`, "error");
 				return;
 			}
-			const startupInput = buildPiStartupInput(splitSessionFile, prompt);
+			const startupInput = buildPiStartupInput(forkSessionFile, prompt);
 
 			const result = await pi.exec("osascript", ["-e", GHOSTTY_SPLIT_SCRIPT, "--", ctx.cwd, startupInput], {
 				timeout: 10_000,
@@ -110,21 +110,21 @@ export default function (pi: ExtensionAPI): void {
 			if (result.code !== 0) {
 				const reason = result.stderr?.trim() || result.stdout?.trim() || "unknown osascript error";
 				notify(ctx, `Failed to launch Ghostty split: ${reason}`, "error");
-				if (splitSessionFile) {
-					notify(ctx, `Duplicated session was created: ${splitSessionFile}`, "info");
+				if (forkSessionFile) {
+					notify(ctx, `Forked session was created: ${forkSessionFile}`, "info");
 				}
 				return;
 			}
 
-			if (splitSessionFile) {
-				const fileName = path.basename(splitSessionFile);
+			if (forkSessionFile) {
+				const fileName = path.basename(forkSessionFile);
 				const suffix = prompt ? " and sent prompt" : "";
-				notify(ctx, `Duplicated to ${fileName} in a new Ghostty split${suffix}.`, "info");
+				notify(ctx, `Forked to ${fileName} in a new Ghostty split${suffix}.`, "info");
 				if (wasBusy) {
-					notify(ctx, "Duplicated from current committed state (in-flight turn continues in original session).", "info");
+					notify(ctx, "Forked from current committed state (in-flight turn continues in original session).", "info");
 				}
 			} else {
-				notify(ctx, "Opened a new Ghostty split (no persisted session to duplicate).", "warning");
+				notify(ctx, "Opened a new Ghostty split (no persisted session to fork).", "warning");
 			}
 		},
 	});
