@@ -15,8 +15,7 @@ Lighting/mood: <lighting + mood>
 Color palette: <palette notes>
 Materials/textures: <surface details>
 Text (verbatim): "<exact text>"
-Constraints: <must keep or avoid>
-Avoid: <negative constraints>
+Constraints: <required state and hard exclusions>
 ```
 
 `Asset type`, `Input images`, and `Scene/backdrop` are prompt fields, not helper flags. Ask only when a missing critical detail blocks success.
@@ -27,15 +26,17 @@ Avoid: <negative constraints>
 - Treat examples in `sample-prompts.md` as fully-authored recipes, not as the default amount of augmentation to add to every request.
 - For photorealism, include `photorealistic` directly when that is the goal, plus concrete real-world texture such as pores, wrinkles, fabric wear, material grain, or imperfect everyday detail.
 
-## Allowed and disallowed augmentation
+## Prompt augmentation
 
-Allowed augmentation for generic prompts:
+For generic prompts, add only:
 - composition and framing cues
 - intended-use or polish-level hints
 - practical layout guidance
 - reasonable scene concreteness that supports the request
 
-Do not add:
+Keep the brief faithful to the request: its cast, props, brand language, story, and directional placement come from the user or surrounding layout. Phrase constraints as the desired visible state; add a hard exclusion when the unwanted element is an exact failure boundary.
+
+Additions requiring explicit support:
 - extra characters, props, or objects that are not implied
 - brand palettes, slogans, or story beats that are not implied
 - arbitrary side-specific placement unless the surrounding layout supports it
