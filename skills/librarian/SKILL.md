@@ -1,32 +1,30 @@
 ---
 name: librarian
-description: "Cache a remote Git repository for reuse when a task points to one as reference."
+description: "Repository research: use when a task cites a remote Git repository to inspect, compare, or use as an implementation reference."
 ---
 
 # Librarian
 
 ## 1. Catalog the repository
 
-Run [`checkout.sh`](checkout.sh) from this skill directory with the repository reference:
+Run [`checkout.sh`](checkout.sh) with the cited repository reference:
 
 ```bash
 bash ~/.pi/agent/skills/librarian/checkout.sh '<repo-reference>' --path-only
 ```
 
-Pass the reference as one quoted argument. It may be an `owner/repo` shorthand, host path, HTTPS URL, SSH URL, or repository deep link. `owner/repo` defaults to GitHub.
+Quote the reference as one argument. The script accepts `owner/repo`, host paths, HTTPS or SSH URLs, and repository deep links; `owner/repo` defaults to GitHub.
 
-Use `--force-update` when the task requires the latest remote state. Otherwise, accept the throttled refresh. Run the script with `--help` when other defaults or overrides are needed.
+Add `--force-update` when the task requires the latest remote state; otherwise use its throttled refresh. Consult `--help` for overrides.
 
-This step is complete when the command returns a checkout path and that path is a Git repository. On failure, diagnose and repair the checkout until it reaches that state.
+Complete only when the command returns a checkout path containing a Git repository.
 
 ## 2. Research from the catalog
 
-Use the returned path for repository searches and reads. Run `checkout.sh` again whenever the repository appears in a later task; it reuses the stable cache path and refreshes stale checkouts.
+Search and read the returned path until every repository-dependent claim needed by the result is verified against the checkout.
 
-This step is complete when every repository-dependent claim needed for the result has been verified against the cached checkout.
+For a later task, run `checkout.sh` again: it reuses the stable catalog path and refreshes stale checkouts.
 
 ## 3. Isolate modifications
 
-When the task requires edits, create a separate worktree or copy outside the cache and modify that workspace. Keep the cached checkout reusable for future research.
-
-This step is complete when all task changes live in the isolated workspace and `git status --porcelain` in the cached checkout shows no task-specific changes.
+When the task requires edits, create a worktree or copy outside the catalog and modify that workspace. Complete only when every task change lives there and `git status --porcelain` in the cached checkout contains no task-specific change.
