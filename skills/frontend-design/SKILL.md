@@ -1,6 +1,7 @@
 ---
 name: frontend-design
 description: Frontend art direction for building or substantially reshaping an interface. Use when a UI needs a distinctive visual concept, subject-specific typography, palette, layout, motion, or a polished implementation rather than routine component work.
+disable-model-invocation: true
 ---
 
 # Frontend Art Direction
