@@ -1,44 +1,39 @@
 ---
 name: audio-transcription
-description: "Transcribe local audio/video and Apple Voice Memos through OpenAI gpt-transcribe using Pi's Codex OAuth."
+description: "Transcription for local audio/video and Apple Voice Memos via OpenAI. Use for dictation, lectures, meetings, or difficult/noisy recordings."
 ---
 
-Use this skill whenever the user asks to transcribe an audio/video file, Voice Memo, dictation, lecture, meeting recording, or bad audio.
+# Audio Transcription
 
-## Core rules
+Produce a **faithful** transcript with the included helper. It uploads audio to OpenAI Realtime `gpt-transcribe` using Pi's `openai-codex` OAuth.
 
-1. **Preserve temporary inputs immediately.** Voice Memo share-sheet paths can disappear. The helper stages the input under `/private/tmp/audio-transcription-inputs/` before connecting or probing.
-2. **Use the included helper only.** It streams audio to OpenAI Realtime `gpt-transcribe` using the `openai-codex` OAuth credential in `~/.pi/agent/auth.json`. Never request an OpenAI API key and never use local MLX/Whisper models.
-3. **Cloud disclosure.** Audio is uploaded to OpenAI. This workflow is configured because the user explicitly selected cloud transcription.
-4. **Force language when known.** Do not infer language from the filename. Use `auto` only when genuinely unknown.
-5. **Use prompt hints for difficult audio.** Include names, places, jargon, accent, and likely subject matter.
-6. **Deliver a cleaned best-effort transcript.** Lightly punctuate and paragraph output; mark uncertain spans as `[unclear]` rather than inventing words.
+## Execution
 
-## Usage
+1. Resolve the local input path without probing the file. This step is complete when one source path is identified.
+2. Choose the language from the user's statement or recording context—never from its filename. Use a language code when known and `auto` only when unknown. Add a prompt containing any known names, places, jargon, accent, and subject. This step is complete when language and available hints are represented in the command.
+3. Run `transcribe-audio.py` from this skill directory. For a Voice Memo, share-sheet attachment, or other temporary path, make this the first operation that touches the source; the helper copies it before authentication or media probing. This step is complete when it reports both a staged path under `/private/tmp/audio-transcription-inputs/` and `transcript.txt`, or returns a specific error handled below.
+4. Read the entire `transcript.txt`. If recognizable names or technical terms are wrong, rerun from the original input with a more specific prompt, then inspect the entire replacement. This step is complete when no identifiable prompt-correctable errors remain.
+5. Return the faithful transcript: preserve wording and language, add only light punctuation and paragraph breaks, and render genuinely uncertain speech as `[unclear]`. Include the saved transcript path. The task is complete when all transcribed speech is delivered without invented content.
 
-Run from this skill directory:
+## Helper
+
+Known language:
 
 ```bash
 ./transcribe-audio.py "/path/to/audio.m4a" --language en \
-  --prompt "Names, places, programming terms, accent, and subject context."
+  --prompt "Known names, places, jargon, accent, and subject."
 ```
 
-Auto-detect language:
+Unknown language:
 
 ```bash
 ./transcribe-audio.py "/path/to/audio.m4a" --language auto
 ```
 
-The helper:
+The helper writes `transcript.txt` and `source.txt` under `/private/tmp/audio-transcriptions/<name>-<timestamp>/`.
 
-- stages a stable copy under `/private/tmp/audio-transcription-inputs/`
-- obtains and refreshes Pi's `openai-codex` OAuth credential without exposing it
-- converts audio/video to 24 kHz mono PCM with FFmpeg
-- streams PCM to OpenAI Realtime `gpt-transcribe`
-- writes `transcript.txt` and `source.txt` under `/private/tmp/audio-transcriptions/<name>-<timestamp>/`
+## Failures
 
-If authentication fails, ask the user to run `/login` for `openai-codex`. Do not fall back to API keys or local models.
-
-## Quality checks
-
-Inspect `transcript.txt`. Rerun with a stronger prompt when names or technical vocabulary are wrong. Do not over-edit uncertain content.
+- Authentication: ask the user to run `/login` for `openai-codex`, then rerun the helper. Keep OAuth as the credential path; use no API key or local transcription model.
+- Missing FFmpeg: report that `ffmpeg` is required.
+- Missing or unreadable input: ask for the attachment again; temporary share paths may have expired.
