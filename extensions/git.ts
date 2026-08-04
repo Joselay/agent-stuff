@@ -949,16 +949,24 @@ class GitViewer implements Component {
     if (this.files.length > 0) void this.loadSelected(true);
   }
 
-  invalidate(): void {
+  /** Clear only frame/layout caches after interaction. */
+  private invalidateRender(): void {
     this.cachedWidth = undefined;
     this.cachedRows = undefined;
     this.cachedLines = undefined;
-    this.renderedCache.clear();
     this.rowCache.clear();
     this.rowCacheWidth = -1;
+  }
+
+  /** TUI invalidation may mean the theme changed, so rebuild coloured rows. */
+  invalidate(): void {
+    this.invalidateRender();
+    this.renderedCache.clear();
     const file = this.files[this.fileIndex];
     const cached = file ? this.cache.get(file.path) : undefined;
-    if (file && cached) this.applyDiff(cached, file.path);
+    // Preserve the user's position. Resetting here makes every redraw undo
+    // j/k and arrow-key scrolling.
+    if (file && cached) this.applyDiff(cached, file.path, false);
   }
 
   dispose(): void {
@@ -1289,7 +1297,11 @@ class GitViewer implements Component {
     }
   }
 
-  private applyDiff(result: FileDiff, filePath: string): void {
+  private applyDiff(
+    result: FileDiff,
+    filePath: string,
+    resetScroll = true,
+  ): void {
     this.diffMeta = result;
     this.rowCache.clear();
 
@@ -1312,14 +1324,16 @@ class GitViewer implements Component {
       this.diffLines = lines;
       // Land on the first hunk — firstChangeIndex is against the uncoloured
       // lines, which renderDiffColored keeps 1:1 with (no header injection).
-      const target = result.firstChangeIndex ?? 0;
       const listHeight = this.paneInnerHeight();
       const maxScroll = Math.max(0, this.diffLines.length - listHeight);
+      const target = resetScroll
+        ? (result.firstChangeIndex ?? 0)
+        : this.diffScroll;
       this.diffScroll = Math.max(0, Math.min(maxScroll, target));
       return;
     }
 
-    this.diffScroll = 0;
+    if (resetScroll) this.diffScroll = 0;
     this.diffLines = [
       {
         text: this.theme.fg(
@@ -1431,7 +1445,7 @@ class GitViewer implements Component {
   }
 
   private redraw(): void {
-    this.invalidate();
+    this.invalidateRender();
     this.tui.requestRender();
   }
 
