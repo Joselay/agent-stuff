@@ -1,26 +1,11 @@
 # Running Scripts with uv
 
-## Basic Usage
+For a dependency-free script:
 
 ```bash
-uv run script.py                   # Run a script
-uv run script.py arg1 arg2         # With arguments
-uv run --python 3.10 script.py     # Specific Python version
-echo 'print("hi")' | uv run -      # From stdin
-```
-
-In a project directory, use `--no-project` to skip installing the project:
-
-```bash
-uv run --no-project script.py
-```
-
-## Syntax Verification (No `__pycache__`)
-
-Use the AST parser instead of `python -m py_compile`:
-
-```bash
-uv run python -m ast script.py >/dev/null
+uv run script.py
+uv run --python 3.12 script.py
+uv run --no-project script.py  # Isolate it from the surrounding project
 ```
 
 ## Ad-hoc Dependencies
@@ -31,9 +16,9 @@ uv run --with 'requests>2,<3' script.py
 uv run --with requests --with rich script.py
 ```
 
-## Inline Script Metadata (Recommended)
+## Inline Metadata
 
-Declare dependencies directly in the script:
+For a maintained standalone script, declare every dependency and the Python requirement using PEP 723 metadata:
 
 ```python
 # /// script
@@ -48,16 +33,15 @@ import requests
 from rich import print
 ```
 
-Then just: `uv run script.py`
-
-### Managing Dependencies
-
 ```bash
-uv init --script example.py --python 3.12   # Create script with metadata
-uv add --script example.py requests rich    # Add dependencies
+uv init --script example.py --python 3.12
+uv add --script example.py requests rich
+uv run example.py
 ```
 
-### Alternative Index
+Inline metadata isolates the script from any surrounding project. Keep `dependencies = []` even when empty.
+
+### Alternative indexes
 
 ```bash
 uv add --index "https://example.com/simple" --script example.py requests
@@ -70,15 +54,13 @@ Adds to metadata:
 # url = "https://example.com/simple"
 ```
 
-## Locking Dependencies
-
-```bash
-uv lock --script example.py  # Creates example.py.lock
-```
-
 ## Reproducibility
 
-Pin resolution date:
+```bash
+uv lock --script example.py  # Creates example.py.lock beside the script
+```
+
+For time-bounded resolution:
 
 ```python
 # /// script
@@ -88,7 +70,7 @@ Pin resolution date:
 # ///
 ```
 
-## Executable Scripts (Shebang)
+## Executable scripts
 
 ```python
 #!/usr/bin/env -S uv run --script

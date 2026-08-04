@@ -1,37 +1,33 @@
 ---
 name: uv
-description: "Use `uv` instead of pip/python/venv. Run scripts with `uv run script.py`, add deps with `uv add`, use inline script metadata for standalone scripts."
+description: "uv Python tooling: use for Python execution, ephemeral CLI tools, project dependencies or environments, Python versions, standalone scripts, and package builds."
 ---
 
-## Quick Reference
+# uv
+
+Route by lifetime:
 
 ```bash
-uv run script.py                   # Run a script
-uv run --with requests script.py   # Run with ad-hoc dependency
-uv run python -m ast foo.py >/dev/null  # Verify syntax without writing __pycache__
-uv add requests                    # Add dependency to project
-uv init --script foo.py            # Create script with inline metadata
+uv run <command>                         # Project-owned command
+uv run python <args>                     # Python in the project environment
+uvx <tool> [args]                        # Ephemeral CLI, isolated from the project
+uv add <package>                         # Runtime dependency
+uv add --dev <package>                   # Development dependency
+uv remove <package>                      # Remove dependency and relock
+uv sync                                  # Reconcile environment and lockfile
+uv sync --locked                         # Reconcile while requiring a current lockfile
+uv python install <version>              # Install an interpreter
+uv python pin <version>                  # Pin the project interpreter
 ```
 
-## Inline Script Dependencies
+Use `uv run`, rather than `uvx`, for tools declared by the project. Use `uv add` and `uv remove`, rather than editing dependency tables directly, so `pyproject.toml`, `uv.lock`, and the environment move together.
 
-```python
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["requests"]
-# ///
+For a syntax-only check that creates no `__pycache__`:
+
+```bash
+uv run python -m ast <file> >/dev/null
 ```
 
-See [scripts.md](scripts.md) for full details on running scripts, locking, and reproducibility.
+Standalone-script branch: before creating or modifying one, read [scripts.md](scripts.md); account for every dependency, interpreter constraint, isolation boundary, and reproducibility requirement.
 
-## Build Backend
-
-Use `uv_build` for pure Python packages:
-
-```toml
-[build-system]
-requires = ["uv_build>=0.9.28,<0.10.0"]
-build-backend = "uv_build"
-```
-
-See [build.md](build.md) for project structure, namespaces, and file inclusion.
+Package-build branch: before creating or changing one, read [build.md](build.md); account for the backend, package layout, and included files.

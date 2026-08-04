@@ -1,22 +1,21 @@
 # uv Build Backend
 
-Use `uv_build` for pure Python packages. For extension modules, use `hatchling` instead.
+Use `uv_build` for pure Python packages. Let `uv init` generate a compatible backend version range:
 
-## pyproject.toml
-
-```toml
-[project]
-name = "my-package"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = []
-
-[build-system]
-requires = ["uv_build>=0.9.28,<0.10.0"]
-build-backend = "uv_build"
+```bash
+uv init --lib <name>       # Library
+uv init --package <name>   # Packaged application
 ```
 
-## Project Structure
+For an existing project, generate a bare scratch project with the installed `uv` and copy its `[build-system]` table:
+
+```bash
+uv init --bare --build-backend uv <scratch-dir>
+```
+
+The generated requirement carries a lower bound and next-minor upper bound. Preserve both.
+
+## Layout
 
 Default layout uses `src/<package_name>/__init__.py`:
 
@@ -29,7 +28,7 @@ src/
 
 Package name is normalized: `Foo-Bar` → `foo_bar`.
 
-### Custom Module Location
+### Custom module location
 
 ```toml
 [tool.uv.build-backend]
@@ -37,7 +36,7 @@ module-name = "mymodule"
 module-root = ""  # Use project root instead of src/
 ```
 
-### Namespace Packages
+### Namespace packages
 
 For `foo.bar` namespace:
 
@@ -50,7 +49,7 @@ src/foo/bar/__init__.py  # No __init__.py in foo/
 module-name = "foo.bar"
 ```
 
-## File Inclusion/Exclusion
+## File inclusion
 
 Excludes `__pycache__`, `*.pyc`, `*.pyo` by default.
 
@@ -63,3 +62,5 @@ source-exclude = ["/dist", "tests/**"]
 - Includes are anchored (`pyproject.toml` = only root)
 - Excludes are not anchored (`__pycache__` = all dirs named that)
 - Use `/prefix` to anchor excludes
+
+For extension modules, select a backend matched to the implementation: `maturin` for Rust or `scikit-build-core` for C, C++, Fortran, or Cython.
