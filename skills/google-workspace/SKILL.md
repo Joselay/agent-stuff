@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-description: "Google Docs, Sheets, Drive, and Gmail via the gws CLI. Use when the user wants to read or edit a Doc or spreadsheet, manage Drive files or sharing, read or send email, or shares a Docs/Sheets/Drive link or ID."
+description: "Google Workspace via gws. Use for Google Docs, Sheets, Drive, or Gmail tasks, including shared Docs/Sheets/Drive links or IDs."
 metadata:
   version: 0.22.5
   requires:
@@ -10,7 +10,16 @@ metadata:
 
 # Google Workspace
 
-Shared `gws` conventions live here; before running any command for a service, read that service's file.
+## Execution
+
+1. Resolve links to their file IDs and identify every service involved.
+2. Read each involved service file below completely. This step is complete when every requested operation is covered by a service-specific command or the schema-first path.
+3. Build the command. For raw API methods, inspect help and schema before choosing `--params` and `--json`.
+4. Run reads and schema inspection directly. For each write:
+   - validate risky writes with `--dry-run`;
+   - present the exact real command and ask for confirmation immediately before running it;
+   - execute only on confirmation.
+5. Check command output or read back the affected resource. The task is complete when every requested operation has a verified result.
 
 ## Services
 
@@ -37,8 +46,6 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
 
 ## Safety
 
-- Confirm with the user immediately before every command marked "(write)" in the service files. Reads and schema/help inspection need no confirmation.
-- Validate a risky write with `--dry-run` before the real run.
 - Redact API keys, OAuth tokens, and other secrets that surface in output (`gws auth export` prints decrypted credentials).
 - For PII or content-safety screening, run with `--sanitize <Model Armor template>`.
 
@@ -58,7 +65,7 @@ gws <service> <resource> [sub-resource] <method> [flags]
 | `-o, --output PATH` | Save binary output |
 | `--upload PATH` | Multipart file upload |
 
-**Schema-first**: for any raw API method, browse with `gws <service> --help`, inspect with `gws schema <service>.<resource>.<method>`, build `--params`/`--json` from that output, confirm if it writes, then run.
+**Schema-first**: browse with `gws <service> --help`, then inspect with `gws schema <service>.<resource>.<method>`.
 
 `batchUpdate` (any service) is atomic: one invalid request fails the entire batch. When one fails, run `gws schema` on the method and rebuild the request from the schema.
 
