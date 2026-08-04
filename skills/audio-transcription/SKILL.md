@@ -5,14 +5,15 @@ description: "Audio transcription and evidence review for local recordings or at
 
 # Audio Transcription
 
-Produce a faithful, **evidence-reviewed** transcript with `transcribe-audio.py` in this directory.
+Produce a faithful, **evidence-reviewed** transcript with the helper at `~/.pi/agent/skills/audio-transcription/transcribe-audio.py`.
 
 ## Steps
 
-1. **Stage immediately.** On an attachment or other temporary input, make the helper invocation the first tool operation. Run from this skill directory:
+1. **Stage immediately.** On an attachment or other temporary input, make the helper invocation the first tool operation. Commands start in the project directory, so invoke the helper by its absolute path:
 
    ```bash
-   ./transcribe-audio.py "/path/to/input.m4a" --language en \
+   ~/.pi/agent/skills/audio-transcription/transcribe-audio.py \
+     "/path/to/input.m4a" --language en \
      --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
    ```
 
