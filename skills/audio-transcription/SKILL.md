@@ -1,15 +1,15 @@
 ---
 name: audio-transcription
-description: "Audio transcription and evidence review for local recordings or attachments; use to transcribe speech or verify uncertain names, terms, and numbers."
+description: "Evidence-reviewed audio transcription for recordings or attachments; use when the user wants speech transcribed or uncertain names, terms, language, or numbers verified."
 ---
 
 # Audio Transcription
 
-Produce a faithful, **evidence-reviewed** transcript with the helper at `~/.pi/agent/skills/audio-transcription/transcribe-audio.py`.
+Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/audio-transcription/transcribe-audio.py`.
 
 ## Steps
 
-1. **Stage immediately.** On an attachment or other temporary input, make the helper invocation the first tool operation. Commands start in the project directory, so invoke the helper by its absolute path:
+1. **Preserve the input.** For an attachment or other temporary input, invoke the helper as the first tool operation so it stages a durable copy. Commands start in the project directory, so use the helper's full path:
 
    ```bash
    ~/.pi/agent/skills/audio-transcription/transcribe-audio.py \
@@ -17,24 +17,19 @@ Produce a faithful, **evidence-reviewed** transcript with the helper at `~/.pi/a
      --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
    ```
 
-   Use a specific language only when the user or recording context establishes it; otherwise use `--language auto`. Add a prompt only with independently known facts such as names, jargon, accent, or subject. Treat the filename as a locator. This step is complete when the command reports a staged path under `/private/tmp/audio-transcription-inputs/` and a `transcript.txt`.
+   Set a language only when the user or recording context establishes it; otherwise use `--language auto`. Build any prompt from independently supplied or verified names, jargon, accent, and subject; use the filename only to locate the input. This step is complete when the command reports both a staged path under `/private/tmp/audio-transcription-inputs/` and a `transcript.txt`.
 
-2. **Audit the complete pass.** Read all of `transcript.txt`. Inventory every implausible name or term, contextual contradiction, malformed number, repeated phrase, apparent omission, and uncertain passage. This step is complete when the entire transcript has been checked and every suspicious passage is in the inventory.
+2. **Audit the complete pass.** Read all of `transcript.txt`. Inventory every implausible name or term, language mismatch, contextual contradiction, malformed number, suspicious repetition, broken sentence, and uncertain passage. Record the exact span and reason for each flag. This step is complete when every line has been checked and every suspicious span is inventoried.
 
-3. **Triangulate each flag.** When unused independent context could resolve a flag, rerun the helper on the staged path from the first pass's `source.txt`, using that context in a focused prompt. Keep each pass in its own output directory. Read each new transcript completely and compare all relevant passes. A retry earns its place by testing new evidence. This step is complete when every relevant independently known fact has been tested once.
+3. **Corroborate every flag.** Rerun the helper on the staged path recorded in the first pass's `source.txt`, keeping each pass in its own output directory. Use a focused prompt only when unused independent context bears on a flag; an unprompted retry tests acoustic convergence. Read every retry completely, add new discrepancies to the inventory, and compare the relevant spans across passes. This step is complete when each flag has a comparison pass and every relevant independent fact has been tested once.
 
-4. **Adjudicate the evidence.** Treat raw passes as evidence rather than replacements. Use convergence between passes to support the heard wording and independent sources to support names, terminology, and orthography. Preserve the speaker's words and language; add only light punctuation, paragraphs, and obvious orthographic corrections. Render unresolved speech as `[unclear]`. This step is complete when every inventory item has a supported rendering or `[unclear]`.
+4. **Adjudicate the evidence.** Converging passes support what was spoken; independent context supports spelling, terminology, and plausibility. Preserve the speaker's words, language, repetitions, and disfluencies. Limit editing to punctuation, paragraphs, and supported orthographic corrections. Render unresolved speech as `[unclear]`. This step is complete when every inventory item has a supported rendering or `[unclear]`.
 
-5. **Deliver and preserve.** If review changed the selected raw pass, write the delivered text beside it as `transcript-reviewed.txt`; otherwise deliver its `transcript.txt`. Return all transcribed speech and the delivered file path.
-
-## Evidence boundaries
-
-- Prompt facts must originate independently of transcript output; a model's speculative wording is not new evidence.
-- Context supports spelling and plausibility, while converging passes support what was spoken. Use `[unclear]` when they do not resolve a disagreement.
+5. **Deliver and preserve.** Select the best-supported raw pass. If adjudication changes it, write the exact delivered text beside it as `transcript-reviewed.txt`; otherwise use its `transcript.txt`. Return the complete transcript and delivered file path. This step is complete when the returned text exactly matches that file.
 
 ## Outputs and failures
 
-The helper uses OpenAI Realtime `gpt-transcribe` with Pi's `openai-codex` OAuth. Each default invocation creates `/private/tmp/audio-transcriptions/<name>-<timestamp>/` containing `transcript.txt` and `source.txt`.
+Each invocation creates `/private/tmp/audio-transcriptions/<name>-<timestamp>/` containing `transcript.txt` and `source.txt`.
 
 - OAuth error: ask the user to run `/login` for `openai-codex`, then rerun the reported staged input.
 - Missing FFmpeg: report that `ffmpeg` is required, then rerun the reported staged input once available.
