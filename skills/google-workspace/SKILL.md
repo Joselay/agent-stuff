@@ -2,11 +2,6 @@
 name: google-workspace
 description: "Google Workspace via gws. Use for Google Docs, Sheets, Drive, or Gmail tasks, including shared Docs/Sheets/Drive links or IDs."
 disable-model-invocation: true
-metadata:
-  version: 0.22.5
-  requires:
-    bins:
-      - gws
 ---
 
 # Google Workspace

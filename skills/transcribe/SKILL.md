@@ -1,24 +1,24 @@
 ---
 name: transcribe
-description: "Evidence-reviewed audio transcription for recordings or attachments; use when the user wants speech transcribed or uncertain names, terms, language, or numbers verified."
+description: "Evidence-reviewed transcripts for recordings or attachments, including verification of uncertain names, terms, languages, and numbers."
 disable-model-invocation: true
 ---
 
-# Audio Transcription
+# Transcribe
 
-Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transcribe/transcribe-audio.py`.
+Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transcribe/transcribe.py`.
 
 ## Steps
 
 1. **Preserve the input.** For an attachment or other temporary input, invoke the helper as the first tool operation so it stages a durable copy. Commands start in the project directory, so use the helper's full path:
 
    ```bash
-   ~/.pi/agent/skills/transcribe/transcribe-audio.py \
+   ~/.pi/agent/skills/transcribe/transcribe.py \
      "/path/to/input.m4a" --language en \
      --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
    ```
 
-   Set a language only when the user or recording context establishes it; otherwise use `--language auto`. Build any prompt from independently supplied or verified names, jargon, accent, and subject; use the filename only to locate the input. This step is complete when the command reports both a staged path under `/private/tmp/audio-transcription-inputs/` and a `transcript.txt`.
+   Set a language only when the user or recording context establishes it; otherwise use `--language auto`. Build any prompt from independently supplied or verified names, jargon, accent, and subject; use the filename only to locate the input. This step is complete when the command reports both a staged path under `/private/tmp/transcribe-inputs/` and a `transcript.txt`.
 
 2. **Audit the complete pass.** Read all of `transcript.txt`. Inventory every implausible name or term, language mismatch, contextual contradiction, malformed number, suspicious repetition, broken sentence, and uncertain passage. Record the exact span and reason for each flag. This step is complete when every line has been checked and every suspicious span is inventoried.
 
@@ -30,7 +30,7 @@ Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transc
 
 ## Outputs and failures
 
-Each invocation creates `/private/tmp/audio-transcriptions/<name>-<timestamp>/` containing `transcript.txt` and `source.txt`.
+Each invocation creates `/private/tmp/transcripts/<name>-<timestamp>/` containing `transcript.txt` and `source.txt`.
 
 - OAuth error: ask the user to run `/login` for `openai-codex`, then rerun the reported staged input.
 - Missing FFmpeg: report that `ffmpeg` is required, then rerun the reported staged input once available.

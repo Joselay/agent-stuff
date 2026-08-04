@@ -130,7 +130,7 @@ def stage_input(source: Path) -> Path:
         raise RuntimeError(f"input does not exist: {source}")
     if not source.is_file():
         raise RuntimeError(f"input is not a file: {source}")
-    stage_dir = Path("/private/tmp/audio-transcription-inputs")
+    stage_dir = Path("/private/tmp/transcribe-inputs")
     stage_dir.mkdir(parents=True, exist_ok=True)
     staged = stage_dir / f"{slugify(source.stem)}-{timestamp()}-{os.getpid()}{source.suffix or '.audio'}"
     shutil.copy2(source, staged)
@@ -186,7 +186,7 @@ def transcribe(staged: Path, *, language: str, prompt: str | None) -> str:
     with connect(
         REALTIME_URL,
         additional_headers=headers,
-        user_agent_header=f"pi-audio-transcription ({sys.platform})",
+        user_agent_header=f"pi-transcribe ({sys.platform})",
         open_timeout=15,
         close_timeout=2,
         max_size=4 * 1024 * 1024,
@@ -272,7 +272,7 @@ def main() -> int:
 
     source = Path(args.audio).expanduser().resolve()
     staged = stage_input(source)
-    output_dir = args.output_dir or Path("/private/tmp/audio-transcriptions") / f"{slugify(source.stem)}-{timestamp()}"
+    output_dir = args.output_dir or Path("/private/tmp/transcripts") / f"{slugify(source.stem)}-{timestamp()}"
     output_dir.mkdir(parents=True, exist_ok=True)
     source_path = output_dir / "source.txt"
     source_path.write_text(f"original: {source}\nstaged: {staged}\n")
