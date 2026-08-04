@@ -1,70 +1,41 @@
 ---
 name: audio-transcription
-description: "Faithful, reviewed transcription for local audio/video and Apple Voice Memos via OpenAI, including difficult or noisy recordings."
+description: "Transcription and evidence review for local audio/video or imported Apple Voice Memos via OpenAI."
 ---
 
 # Audio Transcription
 
-Produce a **faithful, reviewed** transcript with the included helper. It uploads audio to OpenAI Realtime `gpt-transcribe` using Pi's `openai-codex` OAuth. Do not use local MLX/Whisper models.
+Produce an **evidence-reviewed** transcript with `transcribe-audio.py` in this directory. The helper uses OpenAI Realtime `gpt-transcribe` through Pi's `openai-codex` OAuth.
 
-## Core rules
+## Steps
 
-1. **Preserve temporary inputs immediately.** Make the helper the first operation on Voice Memo, share-sheet, attachment, or other temporary paths; it stages a stable copy before authentication or media probing.
-2. **Use the cloud model only.** Use the included OpenAI Realtime `gpt-transcribe` helper and Pi's `openai-codex` OAuth. Do not substitute MLX Whisper or another local model.
-3. **Force language when known.** Infer it from the user's statement or recording context, never the filename. Use `auto` only when genuinely unknown.
-4. **Supply known context.** Prompt with names, places, jargon, accent, subject, and other facts known independently of the model output. Do not feed speculative words back as facts.
-5. **Review, do not blindly autocorrect.** Fix only errors strongly supported by audio, context, spelling, or agreement between passes. Preserve wording and language. Mark unresolved speech `[unclear]`; never invent it.
-6. **Escalate difficult audio.** Rerun with a more specific evidence-based prompt when output has improbable words, contradictions, dropped speech, or repetition. Compare complete passes rather than automatically accepting the newest one.
+1. **Stage immediately.** Make the helper invocation the first tool operation on an attachment, Voice Memo, share-sheet path, or other temporary input—before probing the file. Choose the language and prompt only from information already supplied by the user. Run from this skill directory:
 
-## Workflow
+   ```bash
+   ./transcribe-audio.py "/path/to/input.m4a" --language en \
+     --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
+   ```
 
-1. Resolve one local source path without probing it.
-2. Choose the language and build a prompt from available independent hints.
-3. Run `transcribe-audio.py` from this skill directory. Success requires both a staged path under `/private/tmp/audio-transcription-inputs/` and a `transcript.txt`.
-4. Read the entire `transcript.txt`. Check names, jargon, isolated words, numbers, repeated phrases, and contextually implausible text.
-5. If anything suspicious is plausibly prompt-correctable, rerun from the original source with a better prompt. Read the entire new transcript and compare both passes. A rerun is another opinion, not automatically the truth.
-6. Lightly punctuate and paragraph the best-supported text. Correct obvious orthography without rewriting the speaker. Use `[unclear]` wherever evidence remains insufficient.
-7. When review changes the raw output, preserve `transcript.txt` and write the delivered version beside it as `transcript-reviewed.txt`. Otherwise deliver `transcript.txt`.
-8. Return all transcribed speech and the path to the delivered transcript.
+   Add `--prompt` when independent context is known. Select a specific language from the user's statement or recording context; otherwise use `--language auto`. Filename text carries no evidence. This step is complete when the command reports both a staged path under `/private/tmp/audio-transcription-inputs/` and a `transcript.txt`.
 
-## Helper
+2. **Audit the complete pass.** Read all of `transcript.txt`. Flag every implausible name or term, contextual contradiction, malformed number, repeated phrase, apparent omission, and uncertain passage. This step is complete when every flagged passage is either supported by evidence or remains explicitly unresolved.
 
-Known language:
+3. **Triangulate suspicious audio.** For every flagged passage where unused independent context could help, rerun the helper on the **staged path recorded in `source.txt`** with that context in a more specific prompt. Read the complete new pass and compare it with every relevant earlier pass. Treat each pass as evidence, never as an automatic replacement. Every retry must test new independent context; this step is complete when all available context has been tested.
 
-```bash
-./transcribe-audio.py "/path/to/audio.m4a" --language en \
-  --prompt "Known names, places, jargon, accent, and subject."
-```
+4. **Prepare the faithful text.** Select wording supported by the audio, independent context, authoritative spellings, or agreement between passes. Preserve the speaker's words and language; add only light punctuation, paragraphs, and obvious orthographic corrections. Render unsupported speech as `[unclear]`. This step is complete when every flag from step 2 has a supported rendering or `[unclear]`.
 
-Unknown language:
+5. **Deliver and preserve.** If review changed the selected raw pass, write the delivered text beside it as `transcript-reviewed.txt`; otherwise deliver its `transcript.txt`. Return all transcribed speech and the delivered file path.
 
-```bash
-./transcribe-audio.py "/path/to/audio.m4a" --language auto
-```
+## Evidence boundaries
 
-The helper writes `transcript.txt` and `source.txt` under `/private/tmp/audio-transcriptions/<name>-<timestamp>/`.
+- Prompt context may contain only facts known independently of model output. Speculative model words are not prompt evidence.
+- Use this helper and its OAuth path; substitute neither API-key authentication nor a local transcription model.
+- Prefer `[unclear]` to a contextually convenient guess when the audio and passes do not resolve a disagreement.
 
-For a second pass, use the same original input and add only independently known context:
+## Outputs and failures
 
-```bash
-./transcribe-audio.py "/path/to/audio.m4a" --language fr \
-  --prompt "French educational recording reading a restaurant menu and prices."
-```
+Each successful default invocation creates `/private/tmp/audio-transcriptions/<name>-<timestamp>/` containing `transcript.txt` and `source.txt`. Keep separate pass directories so their raw outputs remain comparable.
 
-## Quality checks
-
-Rerun and compare when the transcript contains:
-
-- recognizable names or technical terms rendered implausibly;
-- words contradicting known recording context;
-- repeated phrases suggesting a transcription loop;
-- missing or malformed numbers where the surrounding structure is clear;
-- suspicious text in noisy, clipped, or low-volume audio.
-
-Do not silently choose a contextually convenient word when passes disagree. Use the audio and independent context; otherwise write `[unclear]`.
-
-## Failures
-
-- Authentication: ask the user to run `/login` for `openai-codex`, then rerun the helper. Keep OAuth as the credential path; use no API key or local transcription model.
-- Missing FFmpeg: report that `ffmpeg` is required.
-- Missing or unreadable input: ask for the attachment again; temporary share paths may have expired.
+- OAuth error: ask the user to run `/login` for `openai-codex`, then rerun the reported staged input.
+- Missing FFmpeg: report that `ffmpeg` is required, then rerun the reported staged input once available.
+- Missing input: request the attachment again; its temporary path may have expired.

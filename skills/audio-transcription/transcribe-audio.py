@@ -278,14 +278,16 @@ def main() -> int:
     staged = stage_input(source)
     output_dir = args.output_dir or Path("/private/tmp/audio-transcriptions") / f"{slugify(source.stem)}-{timestamp()}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "source.txt").write_text(f"original: {source}\nstaged: {staged}\n")
+    source_path = output_dir / "source.txt"
+    source_path.write_text(f"original: {source}\nstaged: {staged}\n")
+    print(f"staged input: {staged}", file=sys.stderr, flush=True)
+    print(f"source manifest: {source_path}", file=sys.stderr, flush=True)
 
     transcript = transcribe(staged, language=args.language, prompt=args.prompt)
     transcript_path = output_dir / "transcript.txt"
     transcript_path.write_text(transcript + ("\n" if transcript else ""))
     print(transcript or "[no speech]")
     print(f"\ntranscript: {transcript_path}", file=sys.stderr)
-    print(f"staged input: {staged}", file=sys.stderr)
     return 0
 
 
