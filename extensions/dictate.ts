@@ -1,0 +1,855 @@
+// Standalone build of Joselay/pi-kit extensions/dictate (commit 3b44674).
+// Source: https://github.com/Joselay/pi-kit/tree/main/extensions/dictate
+
+// dictate/index.ts
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+  CustomEditor,
+  getAgentDir,
+  ModelRuntime,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+
+// Inlined from extensions/lib/util.ts
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function notify(ctx, message, level = "info") {
+  if (ctx.hasUI)
+    ctx.ui.notify(message, level);
+}
+
+// Inlined from extensions/lib/audio.ts
+var SAMPLE_RATE = 24000;
+
+// Inlined from extensions/lib/codex.ts
+var PROVIDER_ID = "openai-codex";
+function authClaim(access) {
+  try {
+    const payloadPart = access.split(".")[1];
+    if (!payloadPart)
+      return;
+    const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
+    if (!isRecord(payload))
+      return;
+    const claim = payload["https://api.openai.com/auth"];
+    return isRecord(claim) ? claim : undefined;
+  } catch {
+    return;
+  }
+}
+function authClaimString(access, field) {
+  const value = authClaim(access)?.[field];
+  return typeof value === "string" && value ? value : undefined;
+}
+function accountIdFromAccessToken(access) {
+  return authClaimString(access, "chatgpt_account_id");
+}
+var runtimePromise;
+function modelRuntime() {
+  runtimePromise ??= ModelRuntime.create();
+  return runtimePromise;
+}
+async function realtimeCredentials(feature) {
+  let runtime;
+  try {
+    runtime = await modelRuntime();
+  } catch (error) {
+    runtimePromise = undefined;
+    throw new Error(`could not load pi's model runtime (${errorText(error)}); run /login`);
+  }
+  let check;
+  let token;
+  try {
+    check = await runtime.checkAuth(PROVIDER_ID);
+    token = (await runtime.getAuth(PROVIDER_ID))?.auth?.apiKey;
+  } catch (error) {
+    throw new Error(`pi's openai-codex OAuth check failed (${errorText(error)}); run /login`);
+  }
+  if (!runtime.isUsingOAuth(PROVIDER_ID) || check?.type !== "oauth") {
+    throw new Error(`${feature} needs the openai-codex OAuth subscription; run /login first`);
+  }
+  if (!token)
+    throw new Error("could not resolve the OAuth token; run /login again");
+  return { token, accountId: accountIdFromAccessToken(token) };
+}
+
+// Inlined from extensions/lib/realtime.ts
+var CONNECT_TIMEOUT_MS = 1e4;
+var CLOSE_GRACE_MS = 1500;
+var AUTH_HINT = "run /login if this persists";
+function headersFor(credentials, feature, extra) {
+  const headers = {
+    Authorization: `Bearer ${credentials.token}`,
+    originator: "pi",
+    "user-agent": `pi-${feature} (${process.platform}; ${process.arch})`,
+    ...extra
+  };
+  if (credentials.accountId)
+    headers["chatgpt-account-id"] = credentials.accountId;
+  return headers;
+}
+var defaultConnect = (url, headers) => new WebSocket(url, { headers });
+async function openRealtimeSession(config) {
+  const connect = config.connect ?? defaultConnect;
+  const readyEvent = config.readyEvent ?? "session.updated";
+  const socket = connect(config.url, headersFor(config.credentials, config.feature, config.extraHeaders));
+  const queue = [];
+  let ready = config.sessionUpdate === undefined;
+  let closed = false;
+  let closing = false;
+  let notified = false;
+  const finish = (info) => {
+    if (notified)
+      return;
+    notified = true;
+    closed = true;
+    config.onClosed?.(info);
+  };
+  const hangUp = () => {
+    try {
+      socket.close();
+    } catch {}
+  };
+  try {
+    await new Promise((resolve, reject) => {
+      if (config.signal?.aborted) {
+        reject(new Error(`${config.feature} connection cancelled`));
+        return;
+      }
+      let timer;
+      const cleanup = () => {
+        if (timer)
+          clearTimeout(timer);
+        config.signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(new Error(`${config.feature} connection cancelled`));
+      };
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`${config.feature} connection timed out`));
+      }, config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+      config.signal?.addEventListener("abort", onAbort, { once: true });
+      socket.addEventListener("open", () => {
+        cleanup();
+        resolve();
+      });
+      socket.addEventListener("error", (event) => {
+        cleanup();
+        reject(new Error(`${event?.message ?? `could not reach the ${config.feature} API`}; ${AUTH_HINT}`));
+      });
+    });
+  } catch (error) {
+    hangUp();
+    throw error;
+  }
+  socket.addEventListener("message", (event) => {
+    let message;
+    try {
+      message = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
+    } catch {
+      return;
+    }
+    if (message === undefined || message === null)
+      return;
+    if (!ready && message.type === readyEvent) {
+      ready = true;
+      for (const payload of queue.splice(0)) {
+        try {
+          socket.send(payload);
+        } catch {}
+      }
+    }
+    config.onEvent?.(message);
+  });
+  socket.addEventListener("close", (event) => {
+    finish({ code: event?.code, reason: event?.reason, expected: closing });
+  });
+  if (config.sessionUpdate !== undefined) {
+    try {
+      socket.send(JSON.stringify(config.sessionUpdate));
+    } catch {}
+  }
+  return {
+    get ready() {
+      return ready;
+    },
+    get closed() {
+      return closed;
+    },
+    send(payload) {
+      let serialised;
+      try {
+        serialised = JSON.stringify(payload);
+      } catch {
+        return;
+      }
+      if (!ready) {
+        queue.push(serialised);
+        return;
+      }
+      try {
+        if (socket.readyState === 1)
+          socket.send(serialised);
+      } catch {}
+    },
+    close(options) {
+      if (closing)
+        return;
+      closing = true;
+      if (options?.farewell !== undefined && socket.readyState === 1 && !closed) {
+        try {
+          socket.send(JSON.stringify(options.farewell));
+        } catch {}
+        setTimeout(hangUp, options.graceMs ?? CLOSE_GRACE_MS);
+      } else {
+        hangUp();
+      }
+      finish({ expected: true });
+    }
+  };
+}
+
+// Inlined from extensions/lib/state.ts
+var FILE_MODE = 0o600;
+function statePath(name) {
+  const dir = join(getAgentDir(), "state");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, name);
+}
+function legacyStatePath(name) {
+  return join(homedir(), ".cache", "pi", "dictate", name);
+}
+function readState(name, parse) {
+  let raw;
+  try {
+    raw = readFileSync(statePath(name), "utf8");
+  } catch {
+    try {
+      raw = readFileSync(legacyStatePath(name), "utf8");
+    } catch {
+      return;
+    }
+  }
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  try {
+    return parse(value);
+  } catch {
+    return;
+  }
+}
+function writeState(name, value) {
+  const target = statePath(name);
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}
+`, { mode: FILE_MODE });
+    renameSync(temporary, target);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {}
+    throw error;
+  }
+}
+
+// dictate/index.ts
+import {
+  CURSOR_MARKER,
+  isKeyRelease,
+  isKeyRepeat,
+  Key,
+  matchesKey,
+  truncateToWidth
+} from "@earendil-works/pi-tui";
+var STATE_FILE = "dictate.json";
+var MAX_RECORDING_MS = 5 * 60 * 1000;
+var MIN_RECORDING_MS = 150;
+var CLOSE_GRACE_MS2 = 400;
+var FINALIZE_TIMEOUT_MS = 15 * 1000;
+var STDERR_TAIL = 4000;
+var HOLD_TRIGGER_MS = 350;
+var AUTH_HINT2 = "run /login if this persists";
+var REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription";
+var TRANSCRIPTION_MODEL = "gpt-transcribe";
+var TRANSCRIPTION_PROMPT = [
+  "The speaker always dictates in English about software development, coding, and programming.",
+  "Preserve programming terms, code identifiers, command names, and technical product names.",
+  "Spell this coding agent's proper name as Pi.",
+  "Transcribe in English only, using unaccented English letters A-Z for words.",
+  "Do not output any other language."
+].join(" ");
+var RECORDING_FRAMES = ["▁▁▂▃▂▁▁", "▁▂▃▅▃▂▁", "▂▃▅▇▅▃▂", "▃▅▇█▇▅▃", "▂▃▅▇▅▃▂", "▁▂▃▅▃▂▁"];
+var TRANSCRIBING_FRAMES = ["·  ", "·· ", "···"];
+
+class Timer {
+  handle;
+  set(ms, callback, unref = false) {
+    this.clear();
+    this.handle = setTimeout(() => {
+      this.handle = undefined;
+      callback();
+    }, ms);
+    if (unref)
+      this.handle.unref?.();
+  }
+  clear() {
+    if (this.handle)
+      clearTimeout(this.handle);
+    this.handle = undefined;
+  }
+}
+function executable(fallback, candidates) {
+  return candidates.find(existsSync) ?? fallback;
+}
+var FFMPEG = executable("ffmpeg", ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
+var AUDIO_DEVICE = "0";
+function tail(existing, chunk) {
+  return (existing + String(chunk)).slice(-STDERR_TAIL);
+}
+function stopChild(child, signal = "SIGINT") {
+  if (child && child.exitCode === null && child.signalCode === null)
+    child.kill(signal);
+}
+function isEnglishLanguageCode(value) {
+  const primary = String(value).trim().toLowerCase().replaceAll("_", "-").split("-")[0];
+  return primary === "en" || primary === "eng";
+}
+function hasNonAsciiLettersOrMarks(text) {
+  return [...text.normalize("NFD")].some(
+    (character) => /[\p{L}\p{M}]/u.test(character) && !/[A-Za-z]/.test(character)
+  );
+}
+async function openTranscription(signal) {
+  const transcription = {
+    model: TRANSCRIPTION_MODEL,
+    language: "en",
+    prompt: TRANSCRIPTION_PROMPT
+  };
+  const finalizeTimeoutMs = FINALIZE_TIMEOUT_MS;
+  let done = false;
+  let failure;
+  let finalText = "";
+  let detectedLanguages = [];
+  let settle;
+  const finishTimer = new Timer;
+  const fail = (error) => {
+    failure ??= error;
+    settle?.();
+  };
+  const session = await openRealtimeSession({
+    url: REALTIME_URL,
+    feature: "dictate",
+    credentials: await realtimeCredentials("dictate"),
+    signal,
+    sessionUpdate: {
+      type: "session.update",
+      session: {
+        type: "transcription",
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: SAMPLE_RATE },
+            transcription,
+            noise_reduction: { type: "far_field" },
+            turn_detection: null
+          }
+        }
+      }
+    },
+    onEvent: (message) => {
+      switch (message.type) {
+        case "conversation.item.input_audio_transcription.completed":
+          finalText = String(message.transcript ?? "");
+          detectedLanguages = Array.isArray(message.languages)
+            ? message.languages.map((entry) => typeof entry === "string" ? entry : entry?.code).filter(Boolean)
+            : [];
+          settle?.();
+          break;
+        case "conversation.item.input_audio_transcription.failed":
+        case "error":
+          fail(new Error(message.message ?? message.error?.message ?? (message.error ? JSON.stringify(message.error) : "realtime transcription failed")));
+          break;
+      }
+    },
+    onClosed: ({ reason, expected }) => {
+      if (!expected && !done) {
+        const detail = reason?.trim();
+        fail(new Error(`realtime connection closed${detail ? ` (${detail})` : ""}; ${AUTH_HINT2}`));
+      }
+      done = true;
+      settle?.();
+    }
+  });
+  const close = () => {
+    finishTimer.clear();
+    session.close();
+  };
+  return {
+    push(pcm) {
+      if (done || failure)
+        return;
+      session.send({ type: "input_audio_buffer.append", audio: pcm.toString("base64") });
+    },
+    cancel() {
+      done = true;
+      close();
+    },
+    async finish() {
+      if (!done && !failure) {
+        session.send({ type: "input_audio_buffer.commit" });
+        await new Promise((resolve) => {
+          settle = resolve;
+          finishTimer.set(finalizeTimeoutMs, () => fail(new Error("realtime transcription timed out")));
+          if (failure || done)
+            resolve();
+        });
+        settle = undefined;
+      }
+      close();
+      if (failure)
+        throw failure;
+      const text = finalText.trim();
+      const hasNonEnglishLanguage = detectedLanguages.some((code) => !isEnglishLanguageCode(code));
+      if (hasNonEnglishLanguage || hasNonAsciiLettersOrMarks(text))
+        throw new Error("transcription was not English; please try again");
+      return text;
+    }
+  };
+}
+var DEFAULT_STATE = { enabled: false };
+function readDictateState() {
+  const persisted = readState(STATE_FILE, (value) => {
+    if (!isRecord(value))
+      return;
+    return { enabled: value.enabled === true };
+  });
+  return persisted ?? DEFAULT_STATE;
+}
+function writeDictateState(state) {
+  writeState(STATE_FILE, state);
+}
+function supportsDictation(editor) {
+  return typeof editor.insertTextAtCursor === "function";
+}
+function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, holdMs = HOLD_TRIGGER_MS) {
+  let dictationState = "idle";
+  let animationFrame = 0;
+  let animationTimer;
+  let holdTimer;
+  let triggerHeld = false;
+  let holdActivated = false;
+  const stopAnimation = () => {
+    if (animationTimer)
+      clearInterval(animationTimer);
+    animationTimer = undefined;
+  };
+  const cancelHold = () => {
+    if (holdTimer)
+      clearTimeout(holdTimer);
+    holdTimer = undefined;
+    triggerHeld = false;
+    holdActivated = false;
+  };
+  const insertTranscription = (text, atStart = true) => {
+    if (!text)
+      return;
+    if (!atStart) {
+      editor.insertTextAtCursor(text);
+      return;
+    }
+    const body = text.replace(/^\s+/, "");
+    if (!body)
+      return;
+    const cursor = editor.getCursor?.();
+    const line = cursor ? editor.getLines?.()[cursor.line] ?? "" : "";
+    const needsLeadingSpace = !!cursor && cursor.col > 0 && !/\s/.test(line[cursor.col - 1] ?? "");
+    editor.insertTextAtCursor(`${needsLeadingSpace ? " " : ""}${body}`);
+  };
+  const endTranscription = () => {
+    const cursor = editor.getCursor?.();
+    const line = cursor ? editor.getLines?.()[cursor.line] ?? "" : "";
+    if (!cursor || cursor.col > 0 && !/\s/.test(line[cursor.col - 1] ?? "")) {
+      editor.insertTextAtCursor(" ");
+    }
+  };
+  const setDictationState = (state) => {
+    dictationState = state;
+    animationFrame = 0;
+    stopAnimation();
+    if (state !== "idle") {
+      animationTimer = setInterval(() => {
+        animationFrame++;
+        tui.requestRender();
+      }, 120);
+    }
+    tui.requestRender();
+  };
+  const originalHandleInput = editor.handleInput;
+  const handleInput = originalHandleInput.bind(editor);
+  const originalWantsKeyRelease = editor.wantsKeyRelease;
+  const baseWantsKeyRelease = originalWantsKeyRelease === true;
+  editor.wantsKeyRelease = true;
+  editor.handleInput = (data) => {
+    const trigger = matchesKey(data, Key.backtick);
+    if (isKeyRelease(data)) {
+      if (!trigger) {
+        if (baseWantsKeyRelease)
+          handleInput(data);
+        return;
+      }
+      if (!triggerHeld) {
+        if (!isEnabled() && baseWantsKeyRelease)
+          handleInput(data);
+        return;
+      }
+      const wasActivated = holdActivated;
+      cancelHold();
+      if (wasActivated)
+        setDictationActive(false);
+      else
+        handleInput("`");
+      return;
+    }
+    if (triggerHeld && !holdActivated && !trigger) {
+      cancelHold();
+      handleInput("`");
+    }
+    if (isEnabled() && trigger) {
+      if (isKeyRepeat(data) || triggerHeld)
+        return;
+      triggerHeld = true;
+      holdTimer = setTimeout(() => {
+        holdTimer = undefined;
+        if (!triggerHeld || !isEnabled())
+          return;
+        holdActivated = true;
+        setDictationActive(true);
+      }, holdMs);
+      return;
+    }
+    handleInput(data);
+  };
+  const originalRender = editor.render;
+  const render = originalRender.bind(editor);
+  editor.render = (width) => {
+    const lines = render(width);
+    if (dictationState === "idle" || lines.length === 0)
+      return lines;
+    const frames = dictationState === "recording" ? RECORDING_FRAMES : TRANSCRIBING_FRAMES;
+    const frame = frames[animationFrame % frames.length];
+    const label = ` ${frame} `;
+    for (let index = 1;index < lines.length - 1; index++) {
+      const line = lines[index];
+      const marker = line.indexOf(CURSOR_MARKER);
+      if (marker === -1)
+        continue;
+      const cursorStart = line.indexOf("\x1B[7m", marker + CURSOR_MARKER.length);
+      const cursorEnd = line.indexOf("\x1B[0m", cursorStart);
+      if (cursorStart === -1 || cursorEnd === -1)
+        continue;
+      const afterCursor = cursorEnd + "\x1B[0m".length;
+      lines[index] = truncateToWidth(line.slice(0, cursorStart) + (editor.borderColor?.(label) ?? label) + line.slice(afterCursor), width, "");
+      break;
+    }
+    return lines;
+  };
+  return Object.assign(editor, {
+    insertTranscription,
+    endTranscription,
+    setDictationState,
+    disposeDictation: () => {
+      cancelHold();
+      stopAnimation();
+      editor.handleInput = originalHandleInput;
+      editor.render = originalRender;
+      editor.wantsKeyRelease = originalWantsKeyRelease;
+    }
+  });
+}
+var SUPPORTED = process.platform === "darwin";
+function dictate(pi: ExtensionAPI) {
+  let { enabled } = readDictateState();
+  let currentEditor;
+  let ctx: ExtensionContext | undefined;
+  let generation = 0;
+  const notifyUser = (message, level = "info") => {
+    if (ctx)
+      notify(ctx, message, level);
+  };
+  function warmUp() {
+    realtimeCredentials("dictate").catch(() => {});
+  }
+  let recording;
+  let starting;
+  let startController;
+  let transcribing = false;
+  let dictating = false;
+  const maxTimer = new Timer;
+  async function settled() {
+    while (starting) {
+      const pending = starting;
+      await pending;
+      if (starting === pending)
+        starting = undefined;
+    }
+  }
+  function start(editor) {
+    if (starting)
+      return settled();
+    if (recording || transcribing)
+      return Promise.resolve();
+    const token = generation;
+    const controller = new AbortController();
+    startController = controller;
+    const pending = (async () => {
+      try {
+        const child = spawn(FFMPEG, [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-f",
+          "avfoundation",
+          "-i",
+          `:${AUDIO_DEVICE}`,
+          "-ac",
+          "1",
+          "-ar",
+          String(SAMPLE_RATE),
+          "-f",
+          "s16le",
+          "-"
+        ], { stdio: ["ignore", "pipe", "pipe"] });
+        const item = {
+          child,
+          startedAt: Date.now(),
+          stderr: "",
+          bytes: 0,
+          buffered: [],
+          closed: new Promise((resolve) => child.once("close", () => resolve()))
+        };
+        child.stdout?.on("data", (chunk) => {
+          item.bytes += chunk.length;
+          if (item.session)
+            item.session.push(chunk);
+          else
+            item.buffered.push(chunk);
+        });
+        child.stderr?.on("data", (chunk) => item.stderr = tail(item.stderr, chunk));
+        child.once("error", (error) => {
+          if (recording !== item)
+            return;
+          recording = undefined;
+          maxTimer.clear();
+          item.session?.cancel();
+          editor.setDictationState("idle");
+          notifyUser(`Dictation recorder failed: ${error.message}`, "error");
+        });
+        if (token !== generation) {
+          stopChild(child, "SIGKILL");
+          return;
+        }
+        recording = item;
+        editor.setDictationState("recording");
+        const session = await openTranscription(controller.signal);
+        if (token !== generation || recording !== item) {
+          session.cancel();
+          return;
+        }
+        item.session = session;
+        for (const chunk of item.buffered.splice(0))
+          session.push(chunk);
+        maxTimer.set(MAX_RECORDING_MS, () => {
+          notifyUser("Dictation stopped at 5-minute limit", "warning");
+          dictating = false;
+          stop(editor);
+        });
+      } catch (error) {
+        const item = recording;
+        recording = undefined;
+        maxTimer.clear();
+        if (item) {
+          stopChild(item.child, "SIGKILL");
+          item.session?.cancel();
+        }
+        if (token !== generation)
+          return;
+        editor.setDictationState("idle");
+        notifyUser(`Dictation failed: ${errorText(error)}`, "error");
+      }
+    })();
+    starting = pending;
+    pending.finally(() => {
+      if (starting === pending)
+        starting = undefined;
+      if (startController === controller)
+        startController = undefined;
+    });
+    return pending;
+  }
+  async function take() {
+    await settled();
+    const item = recording;
+    if (!item)
+      return;
+    recording = undefined;
+    maxTimer.clear();
+    return item;
+  }
+  async function stop(editor) {
+    const item = await take();
+    if (!item)
+      return;
+    const token = generation;
+    stopChild(item.child);
+    const grace = new Timer;
+    await Promise.race([
+      item.closed,
+      new Promise((resolve) => {
+        grace.set(CLOSE_GRACE_MS2, () => {
+          stopChild(item.child, "SIGKILL");
+          resolve();
+        });
+      })
+    ]);
+    grace.clear();
+    const session = item.session;
+    if (!session || token !== generation || Date.now() - item.startedAt < MIN_RECORDING_MS) {
+      session?.cancel();
+      if (token === generation)
+        editor.setDictationState("idle");
+      return;
+    }
+    transcribing = true;
+    try {
+      if (item.bytes < 1000)
+        throw new Error(item.stderr.trim() || "microphone produced no audio");
+      editor.setDictationState("transcribing");
+      const trailing = await session.finish();
+      if (token !== generation)
+        return;
+      editor.insertTranscription(trailing);
+      if (!trailing) {
+        notifyUser("No speech detected", "warning");
+        return;
+      }
+      editor.endTranscription();
+    } catch (error) {
+      if (token === generation)
+        notifyUser(`Dictation failed: ${errorText(error)}`, "error");
+    } finally {
+      transcribing = false;
+      if (token === generation)
+        editor.setDictationState("idle");
+    }
+  }
+  function setDictationActive(editor, active) {
+    if (transcribing)
+      return;
+    if (!active) {
+      if (!dictating)
+        return;
+      dictating = false;
+      stop(editor);
+      return;
+    }
+    if (dictating)
+      return;
+    dictating = true;
+    start(editor).finally(() => {
+      if (!recording)
+        dictating = false;
+    });
+  }
+  async function teardown() {
+    generation++;
+    dictating = false;
+    maxTimer.clear();
+    startController?.abort();
+    const item = await take();
+    stopChild(item?.child, "SIGKILL");
+    item?.session?.cancel();
+    transcribing = false;
+    currentEditor?.setDictationState("idle");
+  }
+  pi.on("session_start", (_event, context) => {
+    ctx = context;
+    if (context.mode !== "tui")
+      return;
+    if (!SUPPORTED) {
+      if (enabled)
+        notifyUser("Dictation requires macOS (FFmpeg avfoundation); staying off", "warning");
+      return;
+    }
+    const previousEditor = context.ui.getEditorComponent();
+    context.ui.setEditorComponent((tui, theme, keybindings) => {
+      const base = previousEditor?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
+      if (!supportsDictation(base)) {
+        notifyUser("Dictation requires an editor that supports cursor insertion", "warning");
+        return base;
+      }
+      let editor;
+      editor = decorateDictationEditor(base, tui, () => enabled, (active) => setDictationActive(editor, active));
+      currentEditor = editor;
+      return editor;
+    });
+    if (enabled)
+      warmUp();
+  });
+  pi.on("session_shutdown", async () => {
+    await teardown();
+    currentEditor?.disposeDictation();
+    currentEditor = undefined;
+    ctx = undefined;
+  });
+  pi.registerCommand("dictate", {
+    description: "Toggle hold-backtick dictation on/off",
+    handler: async (args, context) => {
+      if (!SUPPORTED) {
+        notify(context, "Dictation requires macOS", "warning");
+        return;
+      }
+      const action = args.trim().toLowerCase();
+      if (action && action !== "on" && action !== "off") {
+        notify(context, "Use /dictate or /dictate on|off", "warning");
+        return;
+      }
+      const nextEnabled = action === "on" ? true : action === "off" ? false : !enabled;
+      if (nextEnabled === enabled) {
+        notify(context, enabled ? "Dictation already on" : "Dictation already off", "info");
+        return;
+      }
+      enabled = nextEnabled;
+      try {
+        writeDictateState({ enabled });
+      } catch (error) {
+        notify(context, `Dictation changed but state was not saved: ${errorText(error)}`, "warning");
+      }
+      if (enabled) {
+        currentEditor?.setDictationState("idle");
+        warmUp();
+        notify(context, "Dictation on - hold ` to record", "info");
+        return;
+      }
+      await teardown();
+      notify(context, "Dictation off", "info");
+    }
+  });
+}
+export {
+  dictate as default,
+  decorateDictationEditor
+};
