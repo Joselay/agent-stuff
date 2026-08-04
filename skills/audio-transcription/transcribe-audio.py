@@ -33,6 +33,8 @@ TRANSCRIPTION_MODEL = "gpt-transcribe"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 AUTH_CLAIM = "https://api.openai.com/auth"
+AGENT_DIR = Path(os.environ.get("PI_AGENT_DIR") or Path.home() / ".pi" / "agent").expanduser()
+AUTH_PATH = AGENT_DIR / "auth.json"
 
 
 def slugify(value: str) -> str:
@@ -54,18 +56,12 @@ def decode_account_id(access_token: str) -> str | None:
         return None
 
 
-def auth_path() -> Path:
-    agent_dir = Path(os.environ.get("PI_AGENT_DIR", "~/.pi/agent")).expanduser()
-    return agent_dir / "auth.json"
-
-
 def read_auth() -> tuple[dict[str, Any], dict[str, Any]]:
-    path = auth_path()
     try:
-        all_auth = json.loads(path.read_text())
+        all_auth = json.loads(AUTH_PATH.read_text())
         credential = all_auth["openai-codex"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"could not read openai-codex OAuth from {path}; run /login") from error
+        raise RuntimeError(f"could not read openai-codex OAuth from {AUTH_PATH}; run /login") from error
     if credential.get("type") != "oauth" or not credential.get("access"):
         raise RuntimeError("openai-codex OAuth is unavailable; run /login")
     return all_auth, credential
@@ -108,7 +104,7 @@ def refresh_oauth(all_auth: dict[str, Any], credential: dict[str, Any]) -> dict[
         "accountId": decode_account_id(access) or credential.get("accountId"),
     }
     all_auth["openai-codex"] = updated
-    path = auth_path()
+    path = AUTH_PATH
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(json.dumps(all_auth, indent=2) + "\n")

@@ -5,7 +5,11 @@ description: "Transcription and evidence review for local audio/video files."
 
 # Audio Transcription
 
-Produce an **evidence-reviewed** transcript with `transcribe-audio.py` in this directory. The helper uses OpenAI Realtime `gpt-transcribe` through Pi's `openai-codex` OAuth.
+Produce an **evidence-reviewed** transcript with `transcribe-audio.py` in this directory.
+
+## Backend contract
+
+The helper uses OpenAI Realtime `gpt-transcribe`. It reads the `openai-codex` OAuth credential from `$PI_AGENT_DIR/auth.json`, falling back to `~/.pi/agent/auth.json` when `PI_AGENT_DIR` is unset. Keep this model and credential entry.
 
 ## Steps
 
@@ -29,7 +33,6 @@ Produce an **evidence-reviewed** transcript with `transcribe-audio.py` in this d
 ## Evidence boundaries
 
 - Prompt context may contain only facts known independently of model output. Speculative model words are not prompt evidence.
-- Use this helper and its OAuth path; substitute neither API-key authentication nor a local transcription model.
 - Prefer `[unclear]` to a contextually convenient guess when the audio and passes do not resolve a disagreement.
 
 ## Outputs and failures
