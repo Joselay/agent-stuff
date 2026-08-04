@@ -1,6 +1,6 @@
 ---
 name: audio-transcription
-description: "Transcription and evidence review for local audio/video or imported Apple Voice Memos via OpenAI."
+description: "Transcription and evidence review for local audio/video files."
 ---
 
 # Audio Transcription
@@ -9,7 +9,7 @@ Produce an **evidence-reviewed** transcript with `transcribe-audio.py` in this d
 
 ## Steps
 
-1. **Stage immediately.** Make the helper invocation the first tool operation on an attachment, Voice Memo, share-sheet path, or other temporary input—before probing the file. Choose the language and prompt only from information already supplied by the user. Run from this skill directory:
+1. **Stage immediately.** Make the helper invocation the first tool operation on an attachment or other temporary input—before probing the file. Choose the language and prompt only from information already supplied by the user. Run from this skill directory:
 
    ```bash
    ./transcribe-audio.py "/path/to/input.m4a" --language en \
