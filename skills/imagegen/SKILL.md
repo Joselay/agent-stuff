@@ -1,6 +1,7 @@
 ---
 name: imagegen
 description: "Generate and edit AI raster images—photos, illustrations, textures, sprites, mockups, transparent cutouts, and reference-guided variants—when the deliverable is a bitmap. Route repo-native SVG/vector, existing-system icons or logos, and HTML/CSS/canvas visuals to native code instead."
+disable-model-invocation: true
 ---
 
 # Image Generation Skill

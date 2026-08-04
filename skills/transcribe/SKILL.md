@@ -1,18 +1,19 @@
 ---
-name: audio-transcription
+name: transcribe
 description: "Evidence-reviewed audio transcription for recordings or attachments; use when the user wants speech transcribed or uncertain names, terms, language, or numbers verified."
+disable-model-invocation: true
 ---
 
 # Audio Transcription
 
-Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/audio-transcription/transcribe-audio.py`.
+Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transcribe/transcribe-audio.py`.
 
 ## Steps
 
 1. **Preserve the input.** For an attachment or other temporary input, invoke the helper as the first tool operation so it stages a durable copy. Commands start in the project directory, so use the helper's full path:
 
    ```bash
-   ~/.pi/agent/skills/audio-transcription/transcribe-audio.py \
+   ~/.pi/agent/skills/transcribe/transcribe-audio.py \
      "/path/to/input.m4a" --language en \
      --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
    ```
