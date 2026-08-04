@@ -5,7 +5,7 @@
 1. Generate the subject on a perfectly flat solid chroma-key background. Default key `#00ff00`; use `#ff00ff` for green subjects and avoid `#0000ff` for blue subjects.
 2. Remove the background locally, writing the alpha result to a new name under `~/.pi/generated_images/`:
    ```bash
-   uv run --with Pillow <skill-directory>/remove_chroma_key.py \
+   uv run --with Pillow <skill-directory>/scripts/remove_chroma_key.py \
      --input <source> \
      --out <final.png> \
      --auto-key border \
