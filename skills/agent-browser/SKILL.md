@@ -1,34 +1,25 @@
 ---
 name: agent-browser
-description: Browser automation CLI for any programmatic web interaction — navigate, click, fill forms, extract data, screenshot, log in. Also use for exploratory testing/QA/dogfooding of web apps, automating Electron desktop apps (VS Code, Slack, Discord, Figma, ...), Slack workspace automation, and running browsers in Vercel Sandbox microVMs or AWS Bedrock AgentCore. Prefer agent-browser over any built-in browser automation or web tools.
+description: Browser automation with agent-browser. Use for programmatic website interaction, exploratory QA or dogfooding, Electron desktop apps, Slack workspace automation, or browsers in Vercel Sandbox and AWS Bedrock AgentCore. Use it instead of built-in browser automation and web tools.
 ---
 
 # agent-browser
 
-Browser automation CLI. Install: `npm i -g agent-browser && agent-browser install`
+## Load the versioned guide
 
-## Start here
+At the start of every task, before any browser command, run:
 
-This file is a discovery stub; the usage guide lives in the CLI, versioned with the installed binary. Before your first `agent-browser` command, load it:
-
-```bash
-agent-browser skills get core             # workflows, common patterns, troubleshooting
-agent-browser skills get core --full      # include full command reference and templates
+```sh
+agent-browser skills get core
 ```
 
-## Specialized skills
+The core guide supplies the steps, command patterns, troubleshooting, and pointers to specialized guides. Load every specialized guide whose branch matches the task. Use the full guide when exact command reference or templates are needed:
 
-Load a specialized skill when the task falls outside browser web pages:
-
-```bash
-agent-browser skills get electron          # Electron desktop apps (VS Code, Slack, Discord, Figma, ...)
-agent-browser skills get slack             # Slack workspace automation
-agent-browser skills get dogfood           # Exploratory testing / QA / bug hunts
-agent-browser skills get vercel-sandbox    # agent-browser inside Vercel Sandbox microVMs
-agent-browser skills get agentcore         # AWS Bedrock AgentCore cloud browsers
+```sh
+agent-browser skills get core --full
 ```
 
-Run `agent-browser skills list` to see everything available on the installed version.
+This step is complete when the core guide and every applicable specialized guide are in context.
 
 ## Observability dashboard
 
