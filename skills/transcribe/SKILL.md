@@ -1,16 +1,14 @@
 ---
 name: transcribe
-description: "Evidence-reviewed transcripts for recordings or attachments, including verification of uncertain names, terms, languages, and numbers."
+description: "Create an evidence-reviewed transcript from audio or video."
 disable-model-invocation: true
 ---
 
 # Transcribe
 
-Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transcribe/transcribe.py`.
-
 ## Steps
 
-1. **Preserve the input.** For an attachment or other temporary input, invoke the helper as the first tool operation so it stages a durable copy. Commands start in the project directory, so use the helper's full path:
+1. **Preserve.** When the input is an attachment or ephemeral path, make the helper the first tool call; it stages a durable copy before contacting the transcription service. Invoke it by absolute location because commands start in the project directory:
 
    ```bash
    ~/.pi/agent/skills/transcribe/transcribe.py \
@@ -18,15 +16,15 @@ Produce a faithful, evidence-reviewed transcript with `~/.pi/agent/skills/transc
      --prompt "English project meeting; speakers include Ana García; topic: WebRTC."
    ```
 
-   Set a language only when the user or recording context establishes it; otherwise use `--language auto`. Build any prompt from independently supplied or verified names, jargon, accent, and subject; use the filename only to locate the input. This step is complete when the command reports both a staged path under `/private/tmp/transcribe-inputs/` and a `transcript.txt`.
+   Use `--language auto` unless the user or recording context establishes a language. Build `--prompt` only from independently supplied or verified names, jargon, accents, and subject matter. Treat the filename solely as a locator. Complete when the command reports a staged path under `/private/tmp/transcribe-inputs/` and a `transcript.txt`.
 
-2. **Audit the complete pass.** Read all of `transcript.txt`. Inventory every implausible name or term, language mismatch, contextual contradiction, malformed number, suspicious repetition, broken sentence, and uncertain passage. Record the exact span and reason for each flag. This step is complete when every line has been checked and every suspicious span is inventoried.
+2. **Audit.** Read the entire `transcript.txt` and build an evidence ledger. Flag every implausible name or term, language mismatch, contextual contradiction, malformed number, suspicious repetition, broken sentence, and uncertain passage; record each exact span and reason. Complete when every transcript span has been checked and every suspicion appears in the ledger.
 
-3. **Corroborate every flag.** Rerun the helper on the staged path recorded in the first pass's `source.txt`, keeping each pass in its own output directory. Use a focused prompt only when unused independent context bears on a flag; an unprompted retry tests acoustic convergence. Read every retry completely, add new discrepancies to the inventory, and compare the relevant spans across passes. This step is complete when each flag has a comparison pass and every relevant independent fact has been tested once.
+3. **Corroborate.** For any flagged item, rerun the helper on the staged path in the first pass's `source.txt`; each invocation already creates a distinct output directory. Prefer an unprompted retry to test acoustic convergence. Use a focused prompt when unused independent context bears on a flag. Read each retry completely, add newly exposed discrepancies to the ledger, and compare relevant spans across passes. One retry may corroborate multiple flags. Complete when every ledger item has comparison evidence and every relevant independent fact has been tested once.
 
-4. **Adjudicate the evidence.** Converging passes support what was spoken; independent context supports spelling, terminology, and plausibility. Preserve the speaker's words, language, repetitions, and disfluencies. Limit editing to punctuation, paragraphs, and supported orthographic corrections. Render unresolved speech as `[unclear]`. This step is complete when every inventory item has a supported rendering or `[unclear]`.
+4. **Adjudicate.** Treat convergence as evidence of what was spoken; use independent context for spelling, terminology, and plausibility. Preserve the speaker's words, language, repetitions, and disfluencies. Edit punctuation, paragraphing, and supported orthography. Render unresolved speech as `[unclear]`. Complete when every ledger item has a supported rendering or `[unclear]`.
 
-5. **Deliver and preserve.** Select the best-supported raw pass. If adjudication changes it, write the exact delivered text beside it as `transcript-reviewed.txt`; otherwise use its `transcript.txt`. Return the complete transcript and delivered file path. This step is complete when the returned text exactly matches that file.
+5. **Deliver.** Select the best-supported raw pass. When adjudication changes it, write the exact final text beside that pass as `transcript-reviewed.txt`; otherwise deliver its `transcript.txt`. Return the complete transcript and its path. Complete when returned text byte-for-byte matches the delivered file.
 
 ## Outputs and failures
 
