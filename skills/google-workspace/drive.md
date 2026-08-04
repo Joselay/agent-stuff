@@ -6,7 +6,7 @@ Search files — Drive query strings use single quotes, so inside a single-quote
 gws drive files list --params '{"q":"name contains '\''report'\'' and trashed=false","fields":"files(id,name,mimeType,parents)"}'
 ```
 
-`list` returns trashed files too, so keep `trashed=false` in the query unless the user wants them. For the full query syntax (`fullText`, `mimeType`, `parents`, `sharedWithMe`, `modifiedTime`), go schema-first with `drive.files.list`.
+`list` returns trashed files too, so keep `trashed=false` in the query unless the user wants them. For the full query syntax (`fullText`, `mimeType`, `parents`, `sharedWithMe`, `modifiedTime`), consult the [Drive search guide](https://developers.google.com/workspace/drive/api/guides/search-files); inspect `drive.files.list` for supported parameters.
 
 Get file metadata:
 

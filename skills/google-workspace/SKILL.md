@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-description: "Google Workspace via gws. Use for Google Docs, Sheets, Drive, or Gmail tasks, including shared Docs/Sheets/Drive links or IDs."
+description: "Operate Google Docs, Sheets, Drive, and Gmail through gws."
 disable-model-invocation: true
 ---
 
@@ -8,14 +8,14 @@ disable-model-invocation: true
 
 ## Execution
 
-1. Resolve links to their file IDs and identify every service involved.
-2. Read each involved service file below completely. This step is complete when every requested operation is covered by a service-specific command or the schema-first path.
-3. Build the command. For raw API methods, inspect help and schema before choosing `--params` and `--json`.
-4. Run reads and schema inspection directly. For each write:
-   - validate risky writes with `--dry-run`;
-   - present the exact real command and ask for confirmation immediately before running it;
-   - execute only on confirmation.
-5. Check command output or read back the affected resource. The task is complete when every requested operation has a verified result.
+1. **Map** the request: extract IDs from links, identify each service and resource type, and classify every operation as read or write. Complete when every URL has a usable API ID and every requested operation is listed.
+2. **Load** each involved service file below completely. Complete when every operation maps to a documented helper or a raw API method.
+3. **Inspect** before constructing commands:
+   - helper: run `gws <service> +<helper> --help`;
+   - raw method: run `gws <service> <resource> [sub-resource] <method> --help` and `gws schema <service>.<resource>[.<sub-resource>].<method>`; inspect referenced messages with `gws schema <service>.<Message>` (`--resolve-refs` is optional and can overflow on large recursive schemas).
+   Complete when every flag and JSON field is supported by the installed CLI.
+4. **Execute** reads directly. For every write, follow service exceptions or run the exact command with `--dry-run`; then show the real command and obtain confirmation immediately before executing it. Complete when every read has run and every write has either executed after confirmation or is awaiting confirmation.
+5. **Verify** each result from command output or a read-back. Complete when every operation is accounted for by a verified result or an explicitly reported error; report IDs and links when returned.
 
 ## Services
 
@@ -26,24 +26,12 @@ disable-model-invocation: true
 | Google Drive | [drive.md](drive.md) |
 | Gmail | [gmail.md](gmail.md) |
 
-## Setup
-
-```bash
-gws --version    # verify install; if missing, see https://github.com/googleworkspace/cli
-gws auth status  # check credentials
-gws auth login   # browser-based OAuth
-```
-
-A service account authenticates instead via:
-
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
-```
+If `gws` is missing or authentication fails, follow [setup.md](setup.md) before continuing.
 
 ## Safety
 
-- Redact API keys, OAuth tokens, and other secrets that surface in output (`gws auth export` prints decrypted credentials).
-- For PII or content-safety screening, run with `--sanitize <Model Armor template>`.
+- Redact API keys, OAuth tokens, and other secrets. Treat `gws auth export --unmasked` output as secret; default export masks secrets.
+- When response screening is requested, add `--sanitize <Model Armor template>`; this sends API responses through Model Armor and requires the `cloud-platform` scope.
 
 ## Command conventions
 
@@ -55,14 +43,12 @@ gws <service> <resource> [sub-resource] <method> [flags]
 |---|---|
 | `--params '{"key":"value"}'` | URL/query parameters |
 | `--json '{"key":"value"}'` | JSON request body |
-| `--format json\|table\|yaml\|csv` | Output format (default: json) |
-| `--dry-run` | Validate without calling the API |
-| `--page-all` | Fetch all pages as NDJSON (`--page-limit N`, max pages, default 10; `--page-delay MS`, default 100) |
+| `--format json\|table\|yaml\|csv` | Output format (raw methods default to json; helpers may differ) |
+| `--dry-run` | Preview and locally validate most requests; verify query parameters against the schema and follow service exceptions |
+| `--page-all` | Auto-paginate as NDJSON, up to `--page-limit` pages (default 10; delay default 100 ms) |
 | `-o, --output PATH` | Save binary output |
 | `--upload PATH` | Multipart file upload |
 
-**Schema-first**: browse with `gws <service> --help`, then inspect with `gws schema <service>.<resource>.<method>`.
-
-`batchUpdate` (any service) is atomic: one invalid request fails the entire batch. When one fails, run `gws schema` on the method and rebuild the request from the schema.
+`batchUpdate` requests are atomic: one invalid request fails the entire batch.
 
 **Quoting**: wrap `--params`/`--json` values in single quotes so the inner double quotes survive the shell. Quote A1 ranges — `"Sheet1!A1:D10"` — because an unquoted `!` triggers history expansion in interactive zsh.

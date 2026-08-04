@@ -17,6 +17,8 @@ gws gmail +read --id MSG_ID --headers
 gws gmail +read --id MSG_ID --html
 ```
 
+Gmail web links commonly identify a thread, while message helpers require a message ID. Resolve a thread link with `gmail.users.threads.get`, then select the requested message ID.
+
 Send (write) — `--draft` saves instead of sending; `-a/--attach` repeats, 25 MB total; `--html` bodies use fragment tags (`<p>`, `<b>`, `<a>`) with no `<html>`/`<body>` wrapper:
 
 ```bash
@@ -44,5 +46,7 @@ Stream new mail as NDJSON (write — creates Pub/Sub resources in a GCP project;
 ```bash
 gws gmail +watch --project GCP_PROJECT --label-ids INBOX --once
 ```
+
+Treat `+watch` as a dry-run exception: its preview can still create Pub/Sub resources. Show the real command and obtain confirmation before invoking it.
 
 Beyond the helpers, the API exposes `users.messages`, `threads`, `labels`, `drafts`, `history`, and `settings` (filters, vacation responder, send-as aliases) — go schema-first, e.g. `gmail.users.messages.list` for raw search or `gmail.users.settings.filters.create` for filters.
