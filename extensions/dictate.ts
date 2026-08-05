@@ -8,7 +8,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   CustomEditor,
-  getAgentDir,
   ModelRuntime,
   type ExtensionAPI,
   type ExtensionContext,
@@ -253,19 +252,12 @@ function statePath(name) {
   mkdirSync(dir, { recursive: true });
   return join(dir, name);
 }
-function legacyStatePath(name) {
-  return join(getAgentDir(), "state", name);
-}
 function readState(name, parse) {
   let raw;
   try {
     raw = readFileSync(statePath(name), "utf8");
   } catch {
-    try {
-      raw = readFileSync(legacyStatePath(name), "utf8");
-    } catch {
-      return;
-    }
+    return;
   }
   let value;
   try {
