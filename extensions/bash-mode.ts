@@ -76,6 +76,14 @@ function fitLabels(left: string, right: string, width: number, paint: Paint): st
 	return `${paint("─")}${fittedLeft}${paint("─".repeat(gap))}${fittedRight}${paint("─")}`;
 }
 
+/** pi bash prefixes are exactly `!` or `!!` (not `!!!+`). */
+function isBashModeText(text: string): boolean {
+	const trimmed = text.trimStart();
+	if (!trimmed.startsWith("!")) return false;
+	if (trimmed.startsWith("!!!")) return false;
+	return true;
+}
+
 export default function bashMode(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
@@ -85,8 +93,15 @@ export default function bashMode(pi: ExtensionAPI): void {
 			addChromeLayer(editor, {
 				id: "bash-mode",
 				order: 30,
+				afterInput: ({ editor }) => {
+					const text = editor.getText();
+					const trimmed = text.trimStart();
+					// pi core marks any leading `!` as bash; undo that for `!!!+`
+					if (!trimmed.startsWith("!") || isBashModeText(text)) return;
+					editor.borderColor = ctx.ui.theme.getThinkingBorderColor(pi.getThinkingLevel());
+				},
 				render: ({ editor, lines, width, state }) => {
-					if (!lines.length || !editor.getText().trimStart().startsWith("!")) return;
+					if (!lines.length || !isBashModeText(editor.getText())) return;
 					const right = (state.get(SESSION_LABEL) as string | undefined) ?? "";
 					const paint =
 						(state.get(SESSION_PAINT) as Paint | undefined) ?? editor.borderColor ?? ((text: string) => text);
