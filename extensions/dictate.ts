@@ -341,6 +341,15 @@ async function selectCurrent(ui, title, options, current, descriptions = {}) {
 var RECORDING_FRAMES = ["▁▁▂▃▂▁▁", "▁▂▃▅▃▂▁", "▂▃▅▇▅▃▂", "▃▅▇█▇▅▃", "▂▃▅▇▅▃▂", "▁▂▃▅▃▂▁"];
 var TRANSCRIBING_FRAMES = ["·  ", "·· ", "···"];
 
+export const DICTATE_EDITOR_BRIDGE = Symbol.for("pi.dictate.editorBridge");
+export interface DictateEditorBridge {
+  decorate<T extends EditorForDictation>(editor: T, tui: any): T;
+}
+export interface EditorForDictation {
+  insertTextAtCursor?(text: string): void;
+  [key: string]: any;
+}
+
 class Timer {
   handle;
   set(ms, callback, unref = false) {
@@ -654,6 +663,7 @@ var SUPPORTED = process.platform === "darwin";
 function dictate(pi: ExtensionAPI) {
   let { enabled, model } = readDictateState();
   let currentEditor;
+  const decoratedEditors = new Set<any>();
   let ctx: ExtensionContext | undefined;
   let generation = 0;
   const notifyUser = (message, level = "info") => {
@@ -866,8 +876,25 @@ function dictate(pi: ExtensionAPI) {
     stopChild(item?.child, "SIGKILL");
     item?.session?.cancel();
     transcribing = false;
-    currentEditor?.setDictationState("idle");
+    for (const editor of decoratedEditors)
+      editor.setDictationState("idle");
   }
+  const bridge: DictateEditorBridge = {
+    decorate(base, tui) {
+      if (!supportsDictation(base))
+        return base;
+      let editor: any;
+      editor = decorateDictationEditor(base, tui, () => enabled, (active) => setDictationActive(editor, active));
+      const dispose = editor.disposeDictation.bind(editor);
+      editor.disposeDictation = () => {
+        decoratedEditors.delete(editor);
+        dispose();
+      };
+      decoratedEditors.add(editor);
+      return editor as typeof base;
+    }
+  };
+  (globalThis as any)[DICTATE_EDITOR_BRIDGE] = bridge;
   pi.on("session_start", (_event, context) => {
     ctx = context;
     if (context.mode !== "tui")
@@ -884,8 +911,7 @@ function dictate(pi: ExtensionAPI) {
         notifyUser("Dictation requires an editor that supports cursor insertion", "warning");
         return base;
       }
-      let editor;
-      editor = decorateDictationEditor(base, tui, () => enabled, (active) => setDictationActive(editor, active));
+      const editor = bridge.decorate(base, tui);
       currentEditor = editor;
       return editor;
     });
@@ -896,6 +922,9 @@ function dictate(pi: ExtensionAPI) {
     await teardown();
     currentEditor?.disposeDictation();
     currentEditor = undefined;
+    decoratedEditors.clear();
+    if ((globalThis as any)[DICTATE_EDITOR_BRIDGE] === bridge)
+      delete (globalThis as any)[DICTATE_EDITOR_BRIDGE];
     ctx = undefined;
   });
   pi.registerCommand("dictate", {

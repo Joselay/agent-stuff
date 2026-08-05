@@ -37,7 +37,7 @@ Pi extensions live in [`extensions`](extensions):
 - [`handoff.ts`](extensions/handoff.ts) - `/handoff` summarizes the conversation and continues in a fresh linked session.
 - [`no-sleep.ts`](extensions/no-sleep.ts) - Prevents macOS sleep while Pi is active.
 - [`notify.ts`](extensions/notify.ts) - Plays a notification sound when the agent finishes.
-- [`recall.ts`](extensions/recall.ts) - Adds project-scoped prompt history to the editor.
+- [`prompt.ts`](extensions/prompt.ts) - Adds project-scoped history, Bash mode, and session-name chrome to the editor.
 - [`reset.ts`](extensions/reset.ts) - `/reset` redeems OpenAI Codex usage resets.
 - [`review.ts`](extensions/review.ts) - `/review` reviews pull requests, branches, commits, folders, or local changes.
 - [`skill-mentions.ts`](extensions/skill-mentions.ts) - Adds short skill commands, inline mentions, highlighting, and completion.

@@ -17,6 +17,7 @@ import {
 	type Component,
 	Editor,
 	type EditorTheme,
+	type Focusable,
 	Key,
 	matchesKey,
 	truncateToWidth,
@@ -24,6 +25,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { DICTATE_EDITOR_BRIDGE, type DictateEditorBridge } from "./dictate";
 
 // Structured output format for question extraction
 interface ExtractedQuestion {
@@ -177,18 +179,24 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 /**
  * Interactive Q&A component for answering extracted questions
  */
-class QnAComponent implements Component {
+class QnAComponent implements Component, Focusable {
+	readonly wantsKeyRelease = true;
 	private questions: ExtractedQuestion[];
 	private answers: string[];
 	private currentIndex: number = 0;
 	private editor: Editor;
+	private disposeEditor?: () => void;
 	private tui: TUI;
 	private onDone: (result: string | null) => void;
 	private showingConfirmation: boolean = false;
 
-	// Cache
-	private cachedWidth?: number;
-	private cachedLines?: string[];
+	get focused(): boolean {
+		return this.editor.focused;
+	}
+
+	set focused(value: boolean) {
+		this.editor.focused = value;
+	}
 
 	// Colors - using proper reset sequences
 	private dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -220,7 +228,13 @@ class QnAComponent implements Component {
 			},
 		};
 
-		this.editor = new Editor(tui, editorTheme);
+		const baseEditor = new Editor(tui, editorTheme);
+		const dictate = (globalThis as any)[DICTATE_EDITOR_BRIDGE] as DictateEditorBridge | undefined;
+		this.editor = (dictate?.decorate(baseEditor, tui) ?? baseEditor) as Editor;
+		const disposeDictation = (this.editor as any).disposeDictation;
+		if (typeof disposeDictation === "function") {
+			this.disposeEditor = disposeDictation.bind(this.editor);
+		}
 		// Disable the editor's built-in submit (which clears the editor)
 		// We'll handle Enter ourselves to preserve the text
 		this.editor.disableSubmit = true;
@@ -263,16 +277,21 @@ class QnAComponent implements Component {
 			parts.push("");
 		}
 
-		this.onDone(parts.join("\n").trim());
+		this.finish(parts.join("\n").trim());
 	}
 
 	private cancel(): void {
-		this.onDone(null);
+		this.finish(null);
+	}
+
+	private finish(result: string | null): void {
+		this.disposeEditor?.();
+		this.disposeEditor = undefined;
+		this.onDone(result);
 	}
 
 	invalidate(): void {
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
+		this.editor.invalidate();
 	}
 
 	handleInput(data: string): void {
@@ -353,10 +372,6 @@ class QnAComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) {
-			return this.cachedLines;
-		}
-
 		const lines: string[] = [];
 		const boxWidth = Math.min(width - 4, 120); // Allow wider box
 		const contentWidth = boxWidth - 4; // 2 chars padding on each side
@@ -452,8 +467,6 @@ class QnAComponent implements Component {
 		}
 		lines.push(padToWidth(this.dim("╰" + horizontalLine(boxWidth - 2) + "╯")));
 
-		this.cachedWidth = width;
-		this.cachedLines = lines;
 		return lines;
 	}
 }
