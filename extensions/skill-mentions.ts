@@ -84,7 +84,10 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 	const names = [...byName.keys()].sort((a, b) => b.length - a.length || a.localeCompare(b));
 	const pattern =
 		names.length > 0
-			? new RegExp(`(\\/(?:skill:)?(?:${names.map(escapeRegExp).join("|")}))(?=[\\s/]|$)`, "g")
+			? new RegExp(
+					`(^|[\\s([{])(\\/(?:skill:)?(?:${names.map(escapeRegExp).join("|")}))(?=[\\s/]|$)`,
+					"g",
+				)
 			: undefined;
 	return { byName, reserved, names, pattern };
 }
@@ -287,10 +290,10 @@ export function injectGhost(
 function highlightSkillTokens(line: string, index: SkillIndex, theme: ExtensionContext["ui"]["theme"]): string {
 	if (!index.pattern || !line.includes("/")) return line;
 
-	return line.replace(index.pattern, (token) => {
+	return line.replace(index.pattern, (_match, boundary: string, token: string) => {
 		const name = token.startsWith("/skill:") ? token.slice("/skill:".length) : token.slice(1);
-		if (!index.byName.has(name)) return token;
-		return theme.fg(colorForSkill(name), token);
+		if (!index.byName.has(name)) return `${boundary}${token}`;
+		return `${boundary}${theme.fg(colorForSkill(name), token)}`;
 	});
 }
 
