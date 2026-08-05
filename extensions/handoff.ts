@@ -1,5 +1,6 @@
 
-import { type Message, uuidv7 } from "@earendil-works/pi-ai";
+import { uuidv7 } from "@earendil-works/pi-ai";
+import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import {
 	BorderedLoader,
 	convertToLlm,
@@ -174,8 +175,7 @@ ${conversationText}
 					timestamp: Date.now(),
 				};
 
-				void ctx.modelRegistry
-					.complete(
+				void complete(
 						model,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
 						{
