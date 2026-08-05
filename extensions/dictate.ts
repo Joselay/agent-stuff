@@ -362,8 +362,45 @@ class Timer {
 function executable(fallback, candidates) {
   return candidates.find(existsSync) ?? fallback;
 }
-var FFMPEG = executable("ffmpeg", ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
-var AUDIO_DEVICE = "0";
+// Overrides make the extension usable when FFmpeg is installed elsewhere or
+// the Mac's microphone is not AVFoundation device 0.
+var FFMPEG = process.env.PI_DICTATE_FFMPEG?.trim() || executable("ffmpeg", ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
+var AUDIO_DEVICE = process.env.PI_DICTATE_AUDIO_DEVICE?.trim() || "0";
+async function audioDeviceDescription() {
+  if (!/^\d+$/.test(AUDIO_DEVICE))
+    return AUDIO_DEVICE;
+  return await new Promise((resolve) => {
+    const child = spawn(FFMPEG, [
+      "-hide_banner",
+      "-f",
+      "avfoundation",
+      "-list_devices",
+      "true",
+      "-i",
+      ""
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+    let output = "";
+    let settled = false;
+    const finish = () => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timeout);
+      const plain = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+      const audioSection = plain.split(/AVFoundation audio devices:\s*/i)[1] ?? "";
+      const match = [...audioSection.matchAll(/\[(\d+)\]\s+([^\r\n]+)/g)]
+        .find((entry) => entry[1] === AUDIO_DEVICE);
+      resolve(match?.[2]?.trim() || `device ${AUDIO_DEVICE}`);
+    };
+    child.stderr?.on("data", (chunk) => output = tail(output, chunk));
+    child.once("error", finish);
+    child.once("close", finish);
+    const timeout = setTimeout(() => {
+      stopChild(child, "SIGKILL");
+      finish();
+    }, 2000);
+  });
+}
 function tail(existing, chunk) {
   return (existing + String(chunk)).slice(-STDERR_TAIL);
 }
@@ -940,7 +977,8 @@ function dictate(pi: ExtensionAPI) {
         return;
       }
       if (!action) {
-        notify(context, `Dictation ${enabled ? "on" : "off"} (${model})`, "info");
+        const audioDevice = await audioDeviceDescription();
+        notify(context, `Dictation ${enabled ? "on" : "off"} (${model}, ${audioDevice})`, "info");
         return;
       }
       if (action === "config") {
