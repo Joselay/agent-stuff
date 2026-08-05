@@ -401,7 +401,8 @@ function gaugeSubtext(gauge: Gauge): string | undefined {
 }
 
 function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
-	const used = `${Math.floor(gauge.utilization)}% used`;
+	const remainingPercent = Math.max(0, Math.min(100, 100 - gauge.utilization));
+	const remaining = `${Math.floor(remainingPercent)}% remaining`;
 	const subtext = gaugeSubtext(gauge);
 	const trailing = (gauge.trailing ?? []).map((line) =>
 		line.color ? theme.fg(line.color, line.text) : theme.fg("dim", line.text),
@@ -410,7 +411,7 @@ function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
 	if (maxWidth >= 62) {
 		return [
 			theme.bold(gauge.title),
-			`${bar(gauge.utilization / 100, 50, theme)} ${used}`,
+			`${bar(remainingPercent / 100, 50, theme)} ${remaining}`,
 			...(subtext ? [theme.fg("dim", subtext)] : []),
 			...trailing,
 		];
@@ -419,8 +420,8 @@ function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
 	return [
 		theme.bold(gauge.title) + (subtext ? ` ${theme.fg("dim", `· ${subtext}`)}` : ""),
 		...trailing,
-		bar(gauge.utilization / 100, maxWidth, theme),
-		used,
+		bar(remainingPercent / 100, maxWidth, theme),
+		remaining,
 	];
 }
 
@@ -453,7 +454,8 @@ function renderPlainReport(snapshot: Snapshot): string {
 			continue;
 		}
 		const subtext = gaugeSubtext(section)?.replace(/^Resets /, "resets ");
-		lines.push(`${section.title}: ${Math.floor(section.utilization)}% used${subtext ? ` · ${subtext}` : ""}`);
+		const remaining = Math.max(0, Math.min(100, 100 - section.utilization));
+		lines.push(`${section.title}: ${Math.floor(remaining)}% remaining${subtext ? ` · ${subtext}` : ""}`);
 	}
 	return lines.join("\n");
 }
