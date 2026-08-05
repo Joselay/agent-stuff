@@ -235,7 +235,7 @@ export default function statusline(pi: ExtensionAPI): void {
 				model: (text: string) => theme.fg("syntaxKeyword", text),
 				context: (text: string) => theme.fg("syntaxVariable", text),
 				session: (text: string) => theme.fg("success", text),
-				weekly: (text: string) => theme.fg("warning", text),
+				weekly: (text: string) => theme.fg("thinkingMax", text),
 			};
 			const statusColors: Paint[] = [
 				color.session,
