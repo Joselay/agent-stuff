@@ -38,6 +38,7 @@ Pi extensions live in [`extensions`](extensions):
 - [`review.ts`](extensions/review.ts) - `/review` reviews pull requests, branches, commits, folders, or local changes.
 - [`skill-mentions.ts`](extensions/skill-mentions.ts) - Adds short skill commands, inline mentions, highlighting, and completion.
 - [`split-fork.ts`](extensions/split-fork.ts) - `/split-fork` opens a forked session in a right-hand Ghostty split.
+- [`statusline.ts`](extensions/statusline.ts) - Adds a compact footer with context, model, project, branch, and usage telemetry.
 - [`subagent.ts`](extensions/subagent.ts) - Adds a serial, observable `subagent` tool backed by tmux.
 - [`todos.ts`](extensions/todos.ts) - Adds a file-backed `todo` tool and `/todos` interface.
 - [`trust-github-repos.ts`](extensions/trust-github-repos.ts) - Automatically trusts GitHub repositories owned by `Joselay` or `earendil-works`.
