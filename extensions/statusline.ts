@@ -204,6 +204,9 @@ async function fetchUsage(ctx: ExtensionContext): Promise<Usage | undefined> {
 export default function statusline(pi: ExtensionAPI): void {
 	let activeModel: Model;
 	let activeContext: ExtensionContext | undefined;
+	let activeCwd = "";
+	let activeContextUsage: ContextUsage | undefined;
+	let activeThinkingLevel = "off";
 	let requestRender: (() => void) | undefined;
 	let usage: Usage | undefined;
 	let fastActive = false;
@@ -226,6 +229,9 @@ export default function statusline(pi: ExtensionAPI): void {
 	function install(ctx: ExtensionContext): void {
 		activeContext = ctx;
 		activeModel = ctx.model;
+		activeCwd = ctx.cwd;
+		activeContextUsage = ctx.getContextUsage();
+		activeThinkingLevel = ctx.thinkingLevel;
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const color = {
@@ -252,12 +258,12 @@ export default function statusline(pi: ExtensionAPI): void {
 				dispose() { unsubscribe(); requestRender = undefined; },
 				invalidate() {},
 				render(width: number): string[] {
-					const model = activeModel ?? ctx.model;
-					const project = [color.project(shortenPath(ctx.cwd))];
+					const model = activeModel;
+					const project = [color.project(shortenPath(activeCwd))];
 					const branch = footerData.getGitBranch();
 					if (branch) project.push(color.branch(branch));
 					let modelText = color.model(model?.id || "no-model");
-					if (model?.reasoning) modelText += color.model(` (${pi.getThinkingLevel()})`);
+					if (model?.reasoning) modelText += color.model(` (${activeThinkingLevel})`);
 					if (fastActive) modelText += separator() + color.session("fast");
 					const limits = visibleGroups(usage, model).flatMap((group) => group.parts.map((part) => {
 						const remaining = Math.max(0, 100 - part.used);
@@ -265,7 +271,7 @@ export default function statusline(pi: ExtensionAPI): void {
 							`${part.label} [${renderBar(remaining)}] ${remaining}% left`,
 						);
 					}));
-					const line = [project.join(separator()), modelText, color.context(contextLeft(ctx.getContextUsage(), model?.contextWindow ?? 0)), ...limits].join(separator());
+					const line = [project.join(separator()), modelText, color.context(contextLeft(activeContextUsage, model?.contextWindow ?? 0)), ...limits].join(separator());
 					const lines = [truncateToWidth(line, width, dim("..."))];
 					const statuses = [...footerData.getExtensionStatuses().entries()]
 						.sort(([a], [b]) => a.localeCompare(b))
@@ -288,14 +294,25 @@ export default function statusline(pi: ExtensionAPI): void {
 		fastActive = (data as { active?: boolean } | undefined)?.active === true;
 		requestRender?.();
 	});
-	pi.on("after_provider_response", (event, ctx) => {
-		if (ctx.model?.provider !== CODEX_PROVIDER) return;
+	pi.on("after_provider_response", (event) => {
+		if (activeModel?.provider !== CODEX_PROVIDER) return;
 		const update = usageFromHeaders(event.headers);
 		if (update) { generation++; usage = mergeUsage(usage, update); requestRender?.(); }
 	});
-	pi.on("agent_settled", (_event, ctx) => { if (ctx.model?.provider === CODEX_PROVIDER) void refreshUsage(ctx); });
+	pi.on("agent_settled", () => {
+		if (!activeContext) return;
+		activeContextUsage = activeContext.getContextUsage();
+		if (activeModel?.provider === CODEX_PROVIDER) void refreshUsage(activeContext);
+		requestRender?.();
+	});
 	pi.on("session_start", (_event, ctx) => install(ctx));
-	pi.on("session_shutdown", () => { generation++; activeContext = undefined; requestRender = undefined; usage = undefined; });
+	pi.on("session_shutdown", () => {
+		generation++;
+		activeContext = undefined;
+		activeContextUsage = undefined;
+		requestRender = undefined;
+		usage = undefined;
+	});
 	pi.on("model_select", (event, ctx) => {
 		activeModel = event.model;
 		generation++;
@@ -306,7 +323,13 @@ export default function statusline(pi: ExtensionAPI): void {
 		}
 		requestRender?.();
 	});
-	pi.on("thinking_level_select", () => requestRender?.());
+	pi.on("thinking_level_select", (event) => {
+		activeThinkingLevel = event.level;
+		requestRender?.();
+	});
 	pi.on("message_end", () => requestRender?.());
-	pi.on("session_compact", () => requestRender?.());
+	pi.on("session_compact", () => {
+		if (activeContext) activeContextUsage = activeContext.getContextUsage();
+		requestRender?.();
+	});
 }
