@@ -292,8 +292,8 @@ export default function whimsical(pi: ExtensionAPI): void {
 
 	pi.on("turn_start", (_event, context) => start(context));
 
-	pi.on("agent_settled", (_event, context) => {
-		if (context.isIdle()) stop();
+	pi.on("agent_settled", () => {
+		stop();
 	});
 
 	pi.on("session_shutdown", () => {
