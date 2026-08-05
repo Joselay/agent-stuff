@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -26,6 +27,7 @@ interface Goal {
 	tokenBudget?: number;
 	tokensUsed: number;
 	timeUsedSeconds: number;
+	timeUsedRemainderMs: number;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -56,6 +58,12 @@ function nowSeconds(): number {
 
 function cloneGoal(goal: Goal): Goal {
 	return { ...goal };
+}
+
+function addElapsedMilliseconds(goal: Goal, elapsedMs: number): void {
+	const totalMs = goal.timeUsedRemainderMs + Math.max(0, Math.floor(elapsedMs));
+	goal.timeUsedSeconds += Math.floor(totalMs / 1_000);
+	goal.timeUsedRemainderMs = totalMs % 1_000;
 }
 
 function charCount(value: string): number {
@@ -126,6 +134,7 @@ function normalizeGoal(value: unknown): Goal | null {
 		tokenBudget,
 		tokensUsed: normalizeNonNegativeInteger(raw.tokensUsed),
 		timeUsedSeconds: normalizeNonNegativeInteger(raw.timeUsedSeconds),
+		timeUsedRemainderMs: Math.min(999, normalizeNonNegativeInteger(raw.timeUsedRemainderMs)),
 		createdAt: normalizeNonNegativeInteger(raw.createdAt, ts),
 		updatedAt: normalizeNonNegativeInteger(raw.updatedAt, ts),
 	};
@@ -373,26 +382,28 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 
 export default function goalExtension(pi: ExtensionAPI) {
 	let goal: Goal | null = null;
-	let activeSinceMs: number | null = null;
+	let activeSinceMonotonicMs: number | null = null;
 	let activeGoalIdAtAgentStart: string | null = null;
 	let continuationQueued = false;
+	let statusTimer: ReturnType<typeof setInterval> | null = null;
 
 	function currentGoalSnapshot(): Goal | null {
 		if (!goal) return null;
 		const snapshot = cloneGoal(goal);
-		if (snapshot.status === "active" && activeSinceMs !== null) {
-			snapshot.timeUsedSeconds += Math.max(0, Math.floor((Date.now() - activeSinceMs) / 1000));
+		if (snapshot.status === "active" && activeSinceMonotonicMs !== null) {
+			addElapsedMilliseconds(snapshot, performance.now() - activeSinceMonotonicMs);
 		}
 		return snapshot;
 	}
 
 	function accountElapsed(): boolean {
-		if (!goal || goal.status !== "active" || activeSinceMs === null) return false;
-		const seconds = Math.max(0, Math.floor((Date.now() - activeSinceMs) / 1000));
-		if (seconds <= 0) return false;
-		goal.timeUsedSeconds += seconds;
+		if (!goal || goal.status !== "active" || activeSinceMonotonicMs === null) return false;
+		const now = performance.now();
+		const milliseconds = Math.max(0, Math.floor(now - activeSinceMonotonicMs));
+		if (milliseconds <= 0) return false;
+		addElapsedMilliseconds(goal, milliseconds);
 		goal.updatedAt = nowSeconds();
-		activeSinceMs += seconds * 1000;
+		activeSinceMonotonicMs = now;
 		return true;
 	}
 
@@ -416,7 +427,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				const snapshot = currentGoalSnapshot() ?? goal;
 				const usage = snapshot.tokenBudget === undefined
 					? ` (${formatElapsedSeconds(snapshot.timeUsedSeconds)})`
-					: ` (${formatTokensCompact(snapshot.tokensUsed)} / ${formatTokensCompact(snapshot.tokenBudget)})`;
+					: ` (${formatTokensCompact(snapshot.tokensUsed)} / ${formatTokensCompact(snapshot.tokenBudget)}, ${formatElapsedSeconds(snapshot.timeUsedSeconds)})`;
 				ctx.ui.setStatus("goal", theme.fg("accent", `Pursuing goal${usage}`));
 				break;
 			}
@@ -436,6 +447,20 @@ export default function goalExtension(pi: ExtensionAPI) {
 				ctx.ui.setStatus("goal", theme.fg("success", "Goal complete"));
 				break;
 		}
+	}
+
+	function stopStatusTimer(): void {
+		if (statusTimer === null) return;
+		clearInterval(statusTimer);
+		statusTimer = null;
+	}
+
+	function startStatusTimer(ctx: ExtensionContext): void {
+		stopStatusTimer();
+		if (ctx.mode !== "tui") return;
+		statusTimer = setInterval(() => {
+			if (goal?.status === "active") updateStatus(ctx);
+		}, 1_000);
 	}
 
 	function showGoalMessage(content: string): void {
@@ -460,10 +485,11 @@ export default function goalExtension(pi: ExtensionAPI) {
 			tokenBudget,
 			tokensUsed: 0,
 			timeUsedSeconds: 0,
+			timeUsedRemainderMs: 0,
 			createdAt: ts,
 			updatedAt: ts,
 		};
-		activeSinceMs = Date.now();
+		activeSinceMonotonicMs = performance.now();
 		continuationQueued = false;
 		return goal;
 	}
@@ -476,7 +502,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		if (goal.status === "active") accountElapsed();
 		const nextStatus = statusAfterObjectiveEdit(goal.status);
 		if (nextStatus === "active" && goal.status !== "active") {
-			activeSinceMs = Date.now();
+			activeSinceMonotonicMs = performance.now();
 			continuationQueued = false;
 		}
 		goal.objective = objective;
@@ -491,10 +517,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 		}
 		if (goal.status === "active" && status !== "active") {
 			accountElapsed();
-			activeSinceMs = null;
+			activeSinceMonotonicMs = null;
 		}
 		if (status === "active" && goal.status !== "active") {
-			activeSinceMs = Date.now();
+			activeSinceMonotonicMs = performance.now();
 			continuationQueued = false;
 		}
 		if (status !== "active") {
@@ -509,7 +535,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		if (!goal) return false;
 		if (goal.status === "active") accountElapsed();
 		goal = null;
-		activeSinceMs = null;
+		activeSinceMonotonicMs = null;
 		activeGoalIdAtAgentStart = null;
 		continuationQueued = false;
 		return true;
@@ -521,7 +547,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		accountElapsed();
 		goal.status = "budgetLimited";
 		goal.updatedAt = nowSeconds();
-		activeSinceMs = null;
+		activeSinceMonotonicMs = null;
 		continuationQueued = false;
 		return true;
 	}
@@ -552,7 +578,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	function reconstructState(ctx: ExtensionContext): void {
 		goal = null;
-		activeSinceMs = null;
+		activeSinceMonotonicMs = null;
 		activeGoalIdAtAgentStart = null;
 		continuationQueued = false;
 
@@ -562,13 +588,20 @@ export default function goalExtension(pi: ExtensionAPI) {
 			goal = normalizeGoal(data?.goal);
 		}
 		if (goal?.status === "active") {
-			activeSinceMs = Date.now();
+			activeSinceMonotonicMs = performance.now();
 		}
 		updateStatus(ctx);
 	}
 
-	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
+	pi.on("session_start", async (_event, ctx) => {
+		reconstructState(ctx);
+		startStatusTimer(ctx);
+	});
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	pi.on("session_shutdown", async () => {
+		stopStatusTimer();
+		if (goal?.status === "active" && accountElapsed()) persist("account");
+	});
 
 	pi.on("before_agent_start", async (event) => {
 		const snapshot = currentGoalSnapshot();
