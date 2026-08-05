@@ -28,6 +28,7 @@ Pi extensions live in [`extensions`](extensions):
 - [`dictate.ts`](extensions/dictate.ts) - `/dictate` enables hold-backtick voice dictation on macOS.
 - [`edit.ts`](extensions/edit.ts) - Replaces `edit` with a grammar-constrained `apply_patch` implementation and diff previews.
 - [`fast.ts`](extensions/fast.ts) - `/fast` toggles OpenAI Codex Fast mode.
+- [`files.ts`](extensions/files.ts) - `/files` browses repository and session-referenced files with open, reveal, edit, and diff actions.
 - [`git.ts`](extensions/git.ts) - `/git` plus `ctrl+shift+g` browses uncommitted diffs and commit history.
 - [`goal.ts`](extensions/goal.ts) - `/goal` manages long-running objectives, budgets, and automatic continuation.
 - [`handoff.ts`](extensions/handoff.ts) - `/handoff` summarizes the conversation and continues in a fresh linked session.
