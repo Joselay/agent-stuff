@@ -25,8 +25,11 @@ Pi extensions live in [`extensions`](extensions):
 - [`answer.ts`](extensions/answer.ts) - `/answer` plus `ctrl+.` to extract and answer questions from the last assistant message.
 - [`btw.ts`](extensions/btw.ts) - `/btw` side-chat popover for quick tangential questions.
 - [`continue.ts`](extensions/continue.ts) - `shift+alt+enter` sends `continue` when the agent is stopped.
+- [`context.ts`](extensions/context.ts) - `/context` shows what fills the context window.
+- [`control.ts`](extensions/control.ts) - Enables control sockets for inter-session messaging and coordination.
 - [`dictate.ts`](extensions/dictate.ts) - `/dictate` enables hold-backtick voice dictation on macOS.
 - [`edit.ts`](extensions/edit.ts) - Replaces `edit` with a grammar-constrained `apply_patch` implementation and diff previews.
+- [`emoji.ts`](extensions/emoji.ts) - `/emoji` opens an emoji picker with shortcode autocomplete.
 - [`fast.ts`](extensions/fast.ts) - `/fast` toggles OpenAI Codex Fast mode.
 - [`files.ts`](extensions/files.ts) - `/files` browses repository and session-referenced files with open, reveal, edit, and diff actions.
 - [`git.ts`](extensions/git.ts) - `/git` plus `ctrl+shift+g` browses uncommitted diffs and commit history.
@@ -41,6 +44,7 @@ Pi extensions live in [`extensions`](extensions):
 - [`split-fork.ts`](extensions/split-fork.ts) - `/split-fork` opens a forked session in a right-hand Ghostty split.
 - [`statusline.ts`](extensions/statusline.ts) - Adds a compact footer with context, model, project, branch, and usage telemetry.
 - [`subagent.ts`](extensions/subagent.ts) - Adds a serial, observable `subagent` tool backed by tmux.
+- [`talk.ts`](extensions/talk.ts) - `/talk` toggles live voice conversation with a background agent on macOS.
 - [`todos.ts`](extensions/todos.ts) - Adds a file-backed `todo` tool and `/todos` interface.
 - [`trust-github-repos.ts`](extensions/trust-github-repos.ts) - Automatically trusts GitHub repositories owned by `Joselay` or `earendil-works`.
 - [`usage.ts`](extensions/usage.ts) - `/usage` shows OpenAI Codex plan limits and credits.
