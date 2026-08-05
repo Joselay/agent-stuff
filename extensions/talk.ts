@@ -1767,8 +1767,7 @@ var TRANSCRIBE_MODEL_DESCRIPTIONS = {
   "gpt-transcribe": "Accuracy-focused, committed turns"
 };
 var DEFAULT_TRANSCRIBE_MODEL = TRANSCRIBE_MODELS[0];
-var TRANSCRIBE_PROMPT = "An English-only software-development conversation. Transcribe only in English. Preserve code identifiers, command names, technical product names, and spell this coding agent's name as Pi.";
-var ENGLISH_ONLY_INSTRUCTION = "Always listen, reason, and respond in English only. If speech is unclear or appears to use another language, ask the user to repeat it in English; never switch languages.";
+var TRANSCRIBE_PROMPT = "A multilingual software-development conversation. Preserve the language being spoken, code identifiers, command names, technical product names, and spell this coding agent's name as Pi.";
 async function selectCurrent2(ui, title, options, current, descriptions = {}) {
   const labels = options.map((option) => {
     const description = descriptions[option];
@@ -1858,19 +1857,14 @@ var TalkSession = class {
   async start() {
     const creds = await realtimeCredentials("talk");
     this.audio = await ensureAecAudio();
-    const prompt = `${BACKEND_PROMPT.replaceAll("{{ user_first_name }}", userFirstName())}
-
-## Language
-
-${ENGLISH_ONLY_INSTRUCTION}`;
+    const prompt = BACKEND_PROMPT.replaceAll("{{ user_first_name }}", userFirstName());
     const startupContext = await buildStartupContext(this.ctx);
     const instructions = startupContext ? `${prompt}
 
 ${startupContext}` : prompt;
     const transcription = {
       model: this.transcribeModel,
-      prompt: TRANSCRIBE_PROMPT,
-      language: "en"
+      prompt: TRANSCRIBE_PROMPT
     };
     this.session = await openRealtimeSession({
       url: `${REALTIME_URL}?model=${encodeURIComponent(this.model)}`,
