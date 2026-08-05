@@ -1,9 +1,18 @@
+/**
+ * Skill mentions extension
+ *
+ * - Short `/name` skill commands expand like native `/skill:name`
+ * - Inline `/name` or `/skill:name` mentions rewrite to skill file paths
+ * - TUI: ghost completion for skill names
+ *
+ * Defers sole `/skill:...` commands to native expansion.
+ */
+
 import {
 	CustomEditor,
 	stripFrontmatter,
 	type ExtensionAPI,
 	type ExtensionContext,
-	type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AutocompleteProvider,
@@ -12,45 +21,9 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname } from "node:path";
 
 const SKILL_PREFIX = "skill:";
-
-const SKILL_COLORS: ThemeColor[] = [
-	"accent",
-	"syntaxKeyword",
-	"syntaxFunction",
-	"syntaxVariable",
-	"syntaxType",
-	"success",
-	"syntaxNumber",
-	"error",
-	"thinkingMax",
-];
-
-const NIGHT_OWL_SKILL_COLORS = [
-	"#a2bffc",
-	"#ecc48d",
-	"#c5e478",
-	"#f78c6c",
-	"#82aaff",
-	"#5ca7e4",
-	"#c792ea",
-	"#7fdbca",
-	"#ff5874",
-	"#57eaf1",
-	"#ffeb95",
-	"#41eec6",
-	"#7986e7",
-	"#c789d6",
-	"#ff869a",
-] as const;
-
-type SkillColor = {
-	id: string;
-	paint: (text: string) => string;
-};
 
 type SkillMeta = {
 	description: string;
@@ -91,12 +64,14 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 			: command.name;
 		if (!name || reserved.has(name)) continue;
 		if (byName.has(name)) continue;
+		// sourceInfo is canonical provenance (extensions.md)
 		const filePath = command.sourceInfo?.path ?? "";
-		const baseDir = filePath ? dirname(filePath) : "";
+		const baseDir = command.sourceInfo?.baseDir ?? (filePath ? dirname(filePath) : "");
 		byName.set(name, { description: command.description ?? "", filePath, baseDir });
 	}
 
-	const names = [...byName.keys()].sort((a, b) => a.length - b.length || a.localeCompare(b));
+	// Longest-first so regex alternation prefers full skill names
+	const names = [...byName.keys()].sort((a, b) => b.length - a.length || a.localeCompare(b));
 	const pattern =
 		names.length > 0
 			? new RegExp(
@@ -152,7 +127,8 @@ function replaceSkillMentionsWithPaths(text: string, index: SkillIndex): string 
 	return text.replace(index.pattern, (_match, boundary: string, token: string) => {
 		const name = skillNameFromToken(token);
 		const filePath = index.byName.get(name)?.filePath;
-		return filePath ? `${boundary}${shortenHomePath(filePath)}` : `${boundary}${token}`;
+		// Absolute paths match native skill <location> + skills.md guidance
+		return filePath ? `${boundary}${filePath}` : `${boundary}${token}`;
 	});
 }
 
@@ -160,60 +136,15 @@ function skillNameFromToken(token: string): string {
 	return token.slice(token.startsWith(`/${SKILL_PREFIX}`) ? SKILL_PREFIX.length + 1 : 1);
 }
 
-function shortenHomePath(filePath: string): string {
-	const home = homedir();
-	return filePath.startsWith(`${home}/`) ? `~/${filePath.slice(home.length + 1)}` : filePath;
-}
-
 function buildSkillBlock(name: string, meta: SkillMeta): string | undefined {
 	if (!meta.filePath) return undefined;
 	try {
 		const body = stripFrontmatter(readFileSync(meta.filePath, "utf-8")).trim();
+		// Same shape as AgentSession._expandSkillCommand
 		return `<skill name="${name}" location="${meta.filePath}">\nReferences are relative to ${meta.baseDir}.\n\n${body}\n</skill>`;
 	} catch {
 		return undefined;
 	}
-}
-
-function colorForSkill(
-	name: string,
-	assigned: Map<string, SkillColor>,
-	theme: ExtensionContext["ui"]["theme"],
-): SkillColor {
-	const existing = assigned.get(name);
-	if (existing) return existing;
-
-	const themeCandidates: SkillColor[] = SKILL_COLORS.map((color) => ({
-		id: theme.getFgAnsi(color),
-		paint: (text) => theme.fg(color, text),
-	}));
-	const nightOwlCandidates: SkillColor[] = NIGHT_OWL_SKILL_COLORS.map((hex) => {
-		const ansi = hexToForegroundAnsi(hex);
-		return { id: ansi, paint: (text) => `${ansi}${text}\x1b[39m` };
-	});
-
-	let hash = 0;
-	for (let i = 0; i < name.length; i++) hash = (hash * 33 + name.charCodeAt(i)) >>> 0;
-	const used = new Set([...assigned.values()].map((color) => color.id));
-	for (const candidates of [themeCandidates, nightOwlCandidates]) {
-		const preferred = hash % candidates.length;
-		for (let offset = 0; offset < candidates.length; offset++) {
-			const color = candidates[(preferred + offset) % candidates.length]!;
-			if (!used.has(color.id)) {
-				assigned.set(name, color);
-				return color;
-			}
-		}
-	}
-
-	const color = nightOwlCandidates[hash % nightOwlCandidates.length]!;
-	assigned.set(name, color);
-	return color;
-}
-
-function hexToForegroundAnsi(hex: `#${string}`): string {
-	const value = Number.parseInt(hex.slice(1), 16);
-	return `\x1b[38;2;${(value >> 16) & 0xff};${(value >> 8) & 0xff};${value & 0xff}m`;
 }
 
 function extractSkillToken(beforeCursor: string): SkillToken | undefined {
@@ -243,7 +174,10 @@ export function inSlashPalette(cursorLine: number, beforeCursor: string): boolea
 
 export function ghostCandidates(index: SkillIndex, query: string): string[] {
 	if (!query) return [];
-	return index.names.filter((name) => name.length > query.length && name.startsWith(query));
+	// Prefer shortest completion for ghost text (independent of regex name order)
+	return index.names
+		.filter((name) => name.length > query.length && name.startsWith(query))
+		.sort((a, b) => a.length - b.length || a.localeCompare(b));
 }
 
 function ghostSuffix(editor: SkillAwareEditor, index: SkillIndex): string | undefined {
@@ -306,20 +240,6 @@ export function injectGhost(
 	return next;
 }
 
-function highlightSkillTokens(
-	line: string,
-	index: SkillIndex,
-	theme: ExtensionContext["ui"]["theme"],
-	assignedColors: Map<string, SkillColor>,
-): string {
-	if (!index.pattern || !line.includes("/")) return line;
-
-	return line.replace(index.pattern, (_match, boundary: string, token: string) => {
-		const name = skillNameFromToken(token);
-		return `${boundary}${colorForSkill(name, assignedColors, theme).paint(token)}`;
-	});
-}
-
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -351,6 +271,7 @@ function createSkillAutocompleteProvider(
 					return false;
 				}
 			} catch {
+				// fall through to current provider
 			}
 			return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
 		},
@@ -368,14 +289,9 @@ function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void 
 		editor.render = (width: number): string[] => {
 			const base = render(width);
 			try {
-				const index = getIndex();
-				const assignedColors = new Map<string, SkillColor>();
-				const lines = base.map((line) =>
-					highlightSkillTokens(line, index, ctx.ui.theme, assignedColors),
-				);
-				if (editor.focused === false || editor.isShowingAutocomplete?.()) return lines;
-				const ghost = ghostSuffix(editor, index);
-				return ghost ? injectGhost(lines, ghost, ctx.ui.theme) : lines;
+				if (editor.focused === false || editor.isShowingAutocomplete?.()) return base;
+				const ghost = ghostSuffix(editor, getIndex());
+				return ghost ? injectGhost(base, ghost, ctx.ui.theme) : base;
 			} catch {
 				return base;
 			}
@@ -396,6 +312,7 @@ function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void 
 					}
 				}
 			} catch {
+				// fall through to default input handling
 			}
 
 			handleInput(data);
@@ -418,23 +335,31 @@ export default function skillsExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event) => {
+		// Skip extension-injected messages (extensions.md)
 		if (event.source === "extension") return;
 
+		// Native expands sole `/skill:name` — leave them alone
 		if (event.text.startsWith(`/${SKILL_PREFIX}`)) return;
 
 		try {
 			const index = getIndex();
 
+			// Short `/name [args]` → same skill block as native `/skill:name`
 			const command = splitSkillCommand(event.text, index);
-			if (command && findSkillMentions(command.args, index).length === 0) {
+			if (command) {
 				const block = buildSkillBlock(command.name, index.byName.get(command.name)!);
-				if (!block) return;
-				return {
-					action: "transform",
-					text: command.args ? `${block}\n\n${command.args}` : block,
-				};
+				if (block) {
+					const args = command.args
+						? replaceSkillMentionsWithPaths(command.args, index)
+						: "";
+					return {
+						action: "transform",
+						text: args ? `${block}\n\n${args}` : block,
+					};
+				}
 			}
 
+			// Inline mentions → absolute skill paths (progressive disclosure via read)
 			const mentions = findSkillMentions(event.text, index);
 			if (mentions.length === 0) return;
 
