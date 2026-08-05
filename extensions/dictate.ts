@@ -882,20 +882,24 @@ function dictate(pi: ExtensionAPI) {
     ctx = undefined;
   });
   pi.registerCommand("dictate", {
-    description: "Choose dictation model; use /dictate on|off to toggle",
+    description: "Show dictation status; use on|off or config",
     handler: async (args, context) => {
       if (!SUPPORTED) {
         notify(context, "Dictation requires macOS", "warning");
         return;
       }
       const action = args.trim().toLowerCase();
-      if (action && action !== "on" && action !== "off") {
-        notify(context, "Use /dictate or /dictate on|off", "warning");
+      if (action && action !== "on" && action !== "off" && action !== "config") {
+        notify(context, "Use /dictate, /dictate on|off, or /dictate config", "warning");
         return;
       }
       if (!action) {
+        notify(context, `Dictation ${enabled ? "on" : "off"} (${model})`, "info");
+        return;
+      }
+      if (action === "config") {
         if (context.mode !== "tui") {
-          notify(context, "Use /dictate on|off outside interactive mode", "warning");
+          notify(context, "Dictation configuration requires TUI mode", "warning");
           return;
         }
         const selected = await selectCurrent(

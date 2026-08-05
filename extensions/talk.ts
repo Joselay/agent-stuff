@@ -2095,34 +2095,20 @@ function talk(pi) {
   });
   pi.on("session_shutdown", () => active?.stop(false));
   pi.registerCommand("talk", {
-    description: "Toggle live voice conversation (realtime speech driving this agent, Codex-style)",
+    description: "Start live voice conversation; use off or config",
     handler: async (args, ctx) => {
       if (process.platform !== "darwin") {
         notify(ctx, "Talk requires macOS (AVFoundation audio)", "warning");
         return;
       }
       const action = args.trim().toLowerCase();
-      if (action && action !== "on" && action !== "off") {
-        notify(ctx, "Use /talk or /talk on|off", "warning");
+      if (action && action !== "on" && action !== "off" && action !== "config") {
+        notify(ctx, "Use /talk, /talk off, or /talk config", "warning");
         return;
       }
-      const turnOn = action === "on" ? true : action === "off" ? false : !active;
-      if (!turnOn) {
-        if (!active) {
-          notify(ctx, "Talk is already off", "info");
-          return;
-        }
-        active.stop(true);
-        notify(ctx, "Talk off", "info");
-        return;
-      }
-      if (active) {
-        notify(ctx, "Talk is already on", "info");
-        return;
-      }
-      if (!action) {
+      if (action === "config") {
         if (!ctx.hasUI) {
-          notify(ctx, "Use /talk on outside interactive mode", "warning");
+          notify(ctx, "Talk configuration requires interactive mode", "warning");
           return;
         }
         const nextModel = await selectCurrent2(
@@ -2164,6 +2150,22 @@ function talk(pi) {
         } catch (error) {
           notify(ctx, `Talk selection changed but state was not saved: ${errorText(error)}`, "warning");
         }
+        notify(ctx, `Talk configuration saved${active ? "; applies next session" : ""}`, "info");
+        return;
+      }
+      const turnOn = action !== "off";
+      if (!turnOn) {
+        if (!active) {
+          notify(ctx, "Talk is already off", "info");
+          return;
+        }
+        active.stop(true);
+        notify(ctx, "Talk off", "info");
+        return;
+      }
+      if (active) {
+        notify(ctx, "Talk is already on", "info");
+        return;
       }
       const session = new TalkSession(
         pi,
