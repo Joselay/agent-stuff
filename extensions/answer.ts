@@ -11,7 +11,7 @@
  */
 
 import { complete, parseJsonWithRepair, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelRegistry, Theme } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
@@ -151,19 +151,19 @@ function toExtractionResult(value: unknown): ExtractionResult | null {
  * Parse the JSON response from the LLM.
  */
 function parseExtractionResult(text: string): ExtractionResult | null {
-	const candidates: string[] = [];
+	const candidates = new Set<string>();
 	const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
 	if (jsonMatch) {
-		candidates.push(jsonMatch[1].trim());
+		candidates.add(jsonMatch[1].trim());
 	}
 
 	const trimmed = text.trim();
-	candidates.push(trimmed);
+	candidates.add(trimmed);
 
 	const firstBrace = trimmed.indexOf("{");
 	const lastBrace = trimmed.lastIndexOf("}");
 	if (firstBrace !== -1 && lastBrace > firstBrace) {
-		candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+		candidates.add(trimmed.slice(firstBrace, lastBrace + 1));
 	}
 
 	for (const candidate of candidates) {
@@ -185,16 +185,13 @@ function parseExtractionResult(text: string): ExtractionResult | null {
  */
 class QnAComponent implements Component, Focusable {
 	readonly wantsKeyRelease = true;
-	private questions: ExtractedQuestion[];
-	private answers: string[];
-	private currentIndex: number = 0;
-	private editor: Editor;
+	private readonly answers: string[];
+	private currentIndex = 0;
+	private readonly editor: Editor;
 	private disposeEditor?: () => void;
-	private tui: TUI;
-	private onDone: (result: string | null) => void;
-	private showingConfirmation: boolean = false;
+	private showingConfirmation = false;
 
-	get focused(): boolean {
+	get focused() {
 		return this.editor.focused;
 	}
 
@@ -202,23 +199,20 @@ class QnAComponent implements Component, Focusable {
 		this.editor.focused = value;
 	}
 
-	// Colors - using proper reset sequences
-	private dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-	private bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
-	private cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
-	private green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-	private yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
-	private gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
-
 	constructor(
-		questions: ExtractedQuestion[],
-		tui: TUI,
-		onDone: (result: string | null) => void,
+		private readonly questions: ExtractedQuestion[],
+		private readonly tui: TUI,
+		theme: Theme,
+		private readonly onDone: (result: string | null) => void,
 	) {
-		this.questions = questions;
 		this.answers = questions.map(() => "");
-		this.tui = tui;
-		this.onDone = onDone;
+
+		this.dim = (text) => theme.fg("dim", text);
+		this.bold = (text) => theme.bold(text);
+		this.cyan = (text) => theme.fg("accent", text);
+		this.green = (text) => theme.fg("success", text);
+		this.yellow = (text) => theme.fg("warning", text);
+		this.gray = (text) => theme.fg("muted", text);
 
 		// Create a minimal theme for the editor
 		const editorTheme: EditorTheme = {
@@ -248,9 +242,16 @@ class QnAComponent implements Component, Focusable {
 		};
 	}
 
-	private allQuestionsAnswered(): boolean {
-		this.saveCurrentAnswer();
-		return this.answers.every((a) => (a?.trim() || "").length > 0);
+	private readonly dim: (text: string) => string;
+	private readonly bold: (text: string) => string;
+	private readonly cyan: (text: string) => string;
+	private readonly green: (text: string) => string;
+	private readonly yellow: (text: string) => string;
+	private readonly gray: (text: string) => string;
+
+	private refresh(): void {
+		this.invalidate();
+		this.tui.requestRender();
 	}
 
 	private saveCurrentAnswer(): void {
@@ -261,8 +262,8 @@ class QnAComponent implements Component, Focusable {
 		if (index < 0 || index >= this.questions.length) return;
 		this.saveCurrentAnswer();
 		this.currentIndex = index;
-		this.editor.setText(this.answers[index] || "");
-		this.invalidate();
+		this.editor.setText(this.answers[index]);
+		this.refresh();
 	}
 
 	private submit(): void {
@@ -307,8 +308,7 @@ class QnAComponent implements Component, Focusable {
 			}
 			if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")) || data.toLowerCase() === "n") {
 				this.showingConfirmation = false;
-				this.invalidate();
-				this.tui.requestRender();
+				this.refresh();
 				return;
 			}
 			return;
@@ -324,14 +324,12 @@ class QnAComponent implements Component, Focusable {
 		if (matchesKey(data, Key.tab)) {
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
-				this.tui.requestRender();
 			}
 			return;
 		}
 		if (matchesKey(data, Key.shift("tab"))) {
 			if (this.currentIndex > 0) {
 				this.navigateTo(this.currentIndex - 1);
-				this.tui.requestRender();
 			}
 			return;
 		}
@@ -341,14 +339,12 @@ class QnAComponent implements Component, Focusable {
 		if (matchesKey(data, Key.up) && this.editor.getText() === "") {
 			if (this.currentIndex > 0) {
 				this.navigateTo(this.currentIndex - 1);
-				this.tui.requestRender();
 				return;
 			}
 		}
 		if (matchesKey(data, Key.down) && this.editor.getText() === "") {
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
-				this.tui.requestRender();
 				return;
 			}
 		}
@@ -364,21 +360,19 @@ class QnAComponent implements Component, Focusable {
 				// On last question - show confirmation
 				this.showingConfirmation = true;
 			}
-			this.invalidate();
-			this.tui.requestRender();
+			this.refresh();
 			return;
 		}
 
 		// Pass to editor
 		this.editor.handleInput(data);
-		this.invalidate();
-		this.tui.requestRender();
+		this.refresh();
 	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
-		const boxWidth = Math.min(width - 4, 120); // Allow wider box
-		const contentWidth = boxWidth - 4; // 2 chars padding on each side
+		const boxWidth = Math.max(2, Math.min(width, 120));
+		const contentWidth = Math.max(1, boxWidth - 4);
 
 		// Helper to create horizontal lines (dim the whole thing at once)
 		const horizontalLine = (count: number) => "─".repeat(count);
@@ -445,7 +439,7 @@ class QnAComponent implements Component, Focusable {
 		// Render the editor component (multi-line input) with padding
 		// Skip the first and last lines (editor's own border lines)
 		const answerPrefix = this.bold("A: ");
-		const editorWidth = contentWidth - 4 - 3; // Extra padding + space for "A: "
+		const editorWidth = Math.max(1, contentWidth - 7); // Extra padding + space for "A: "
 		const editorLines = this.editor.render(editorWidth);
 		for (let i = 1; i < editorLines.length - 1; i++) {
 			if (i === 1) {
@@ -471,13 +465,13 @@ class QnAComponent implements Component, Focusable {
 		}
 		lines.push(padToWidth(this.dim("╰" + horizontalLine(boxWidth - 2) + "╯")));
 
-		return lines;
+		return lines.map((line) => truncateToWidth(line, width, ""));
 	}
 }
 
 export default function (pi: ExtensionAPI) {
 	const answerHandler = async (ctx: ExtensionContext) => {
-			if (!ctx.hasUI) {
+			if (ctx.mode !== "tui") {
 				ctx.ui.notify("answer requires interactive mode", "error");
 				return;
 			}
@@ -538,7 +532,7 @@ export default function (pi: ExtensionAPI) {
 					const response = await complete(
 						extractionModel,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
+						{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: loader.signal },
 					);
 
 					if (response.stopReason === "aborted") {
@@ -586,8 +580,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Show the Q&A component
-			const answersResult = await ctx.ui.custom<string | null>((tui, _theme, _kb, done) => {
-				return new QnAComponent(extractionResult.questions, tui, done);
+			const answersResult = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+				return new QnAComponent(extractionResult.questions, tui, theme, done);
 			});
 
 			if (answersResult === null) {
