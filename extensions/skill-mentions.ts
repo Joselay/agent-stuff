@@ -18,14 +18,41 @@ const SKILL_PREFIX = "skill:";
 
 const SKILL_COLORS: ThemeColor[] = [
 	"accent",
-	"mdLink",
 	"syntaxKeyword",
 	"syntaxFunction",
-	"success",
-	"warning",
 	"syntaxVariable",
 	"syntaxType",
+	"success",
+	"syntaxNumber",
+	"error",
+	"thinkingMax",
 ];
+
+// Additional distinct colors from sdras/night-owl-vscode-theme's original
+// dark token palette. These are used only after the active theme's unique
+// colors are occupied.
+const NIGHT_OWL_SKILL_COLORS = [
+	"#a2bffc",
+	"#ecc48d",
+	"#c5e478",
+	"#f78c6c",
+	"#82aaff",
+	"#5ca7e4",
+	"#c792ea",
+	"#7fdbca",
+	"#ff5874",
+	"#57eaf1",
+	"#ffeb95",
+	"#41eec6",
+	"#7986e7",
+	"#c789d6",
+	"#ff869a",
+] as const;
+
+type SkillColor = {
+	id: string;
+	paint: (text: string) => string;
+};
 
 type SkillMeta = {
 	description: string;
@@ -159,10 +186,50 @@ function buildSkillBlock(name: string, meta: SkillMeta): string | undefined {
 	}
 }
 
-function colorForSkill(name: string): ThemeColor {
+function colorForSkill(
+	name: string,
+	assigned: Map<string, SkillColor>,
+	theme: ExtensionContext["ui"]["theme"],
+): SkillColor {
+	const existing = assigned.get(name);
+	if (existing) return existing;
+
+	const themeCandidates: SkillColor[] = SKILL_COLORS.map((color) => ({
+		id: theme.getFgAnsi(color),
+		paint: (text) => theme.fg(color, text),
+	}));
+	const nightOwlCandidates: SkillColor[] = [];
+	for (const hex of NIGHT_OWL_SKILL_COLORS) {
+		const ansi = hexToForegroundAnsi(hex);
+		nightOwlCandidates.push({ id: ansi, paint: (text) => `${ansi}${text}\x1b[39m` });
+	}
+
 	let hash = 0;
 	for (let i = 0; i < name.length; i++) hash = (hash * 33 + name.charCodeAt(i)) >>> 0;
-	return SKILL_COLORS[hash % SKILL_COLORS.length]!;
+	// Different semantic tokens can resolve to the same actual color in a
+	// theme (for example warning and syntaxType). Compare their ANSI values,
+	// not merely their token names.
+	const used = new Set([...assigned.values()].map((color) => color.id));
+	for (const candidates of [themeCandidates, nightOwlCandidates]) {
+		const preferred = hash % candidates.length;
+		for (let offset = 0; offset < candidates.length; offset++) {
+			const color = candidates[(preferred + offset) % candidates.length]!;
+			if (!used.has(color.id)) {
+				assigned.set(name, color);
+				return color;
+			}
+		}
+	}
+
+	// More visible skills than palette entries: reuse the deterministic color.
+	const color = nightOwlCandidates[hash % nightOwlCandidates.length]!;
+	assigned.set(name, color);
+	return color;
+}
+
+function hexToForegroundAnsi(hex: `#${string}`): string {
+	const value = Number.parseInt(hex.slice(1), 16);
+	return `\x1b[38;2;${(value >> 16) & 0xff};${(value >> 8) & 0xff};${value & 0xff}m`;
 }
 
 function extractSkillToken(beforeCursor: string): SkillToken | undefined {
@@ -287,13 +354,18 @@ export function injectGhost(
 	return next;
 }
 
-function highlightSkillTokens(line: string, index: SkillIndex, theme: ExtensionContext["ui"]["theme"]): string {
+function highlightSkillTokens(
+	line: string,
+	index: SkillIndex,
+	theme: ExtensionContext["ui"]["theme"],
+	assignedColors: Map<string, SkillColor>,
+): string {
 	if (!index.pattern || !line.includes("/")) return line;
 
 	return line.replace(index.pattern, (_match, boundary: string, token: string) => {
 		const name = token.startsWith("/skill:") ? token.slice("/skill:".length) : token.slice(1);
 		if (!index.byName.has(name)) return `${boundary}${token}`;
-		return `${boundary}${theme.fg(colorForSkill(name), token)}`;
+		return `${boundary}${colorForSkill(name, assignedColors, theme).paint(token)}`;
 	});
 }
 
@@ -356,7 +428,12 @@ function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void 
 			const base = render(width);
 			try {
 				const index = getIndex();
-				const lines = base.map((line) => highlightSkillTokens(line, index, ctx.ui.theme));
+				// Resolve colors across the whole visible editor so distinct skills
+				// cannot collide while palette entries remain available.
+				const assignedColors = new Map<string, SkillColor>();
+				const lines = base.map((line) =>
+					highlightSkillTokens(line, index, ctx.ui.theme, assignedColors),
+				);
 				if (editor.focused === false || editor.isShowingAutocomplete?.()) return lines;
 				const ghost = ghostSuffix(editor, index);
 				return ghost ? injectGhost(lines, ghost, ctx.ui.theme) : lines;
