@@ -28,7 +28,6 @@ const CODEX_PROVIDER = "openai-codex";
 const SPARK_MODEL = "gpt-5.3-codex-spark";
 const FAST_EVENT = "codex:fast-changed";
 const USAGE_EVENT = "codex:usage-changed";
-const FAST_STATUS_KEY = "codex-fast";
 
 function cleanStatus(text: string): string {
 	return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
@@ -271,7 +270,6 @@ export default function statusline(pi: ExtensionAPI): void {
 					const line = [project.join(separator()), modelText, color.context(contextLeft(ctx.getContextUsage(), model?.contextWindow ?? 0)), ...limits].join(separator());
 					const lines = [truncateToWidth(line, width, dim("..."))];
 					const statuses = [...footerData.getExtensionStatuses().entries()]
-						.filter(([key]) => key !== FAST_STATUS_KEY)
 						.sort(([a], [b]) => a.localeCompare(b))
 						.map(([, text], index) => statusColors[index % statusColors.length]!(cleanStatus(text)))
 						.join(dim(" "));

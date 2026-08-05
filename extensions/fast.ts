@@ -13,7 +13,6 @@ const FILE_MODE = 0o600;
 const FAST_REQUEST_SERVICE_TIER = "priority";
 const FAST_STATE_FILE = "fast.json";
 const CODEX_FAST_CHANGED_EVENT = "codex:fast-changed";
-const CODEX_FAST_STATUS_KEY = "codex-fast";
 
 type CodexFastChanged = { active: boolean };
 type Model = ExtensionContext["model"];
@@ -117,12 +116,7 @@ function unsupportedModelMessage(model: Model | undefined): string {
 export default function fastMode(pi: ExtensionAPI) {
 	let enabled = readPersistedEnabled() ?? isEnabledByEnv();
 
-	function statusText(): string {
-		return enabled ? "fast:on" : "fast:off";
-	}
-
-	function updateStatus(ctx: ExtensionContext, model: Model | undefined = ctx.model): void {
-		if (ctx.hasUI) ctx.ui.setStatus(CODEX_FAST_STATUS_KEY, statusText());
+	function publishActiveState(ctx: ExtensionContext, model: Model | undefined = ctx.model): void {
 		// Publish the decided answer, not the ingredients: subscribers should not
 		// have to know which models carry the priority tier.
 		pi.events.emit(CODEX_FAST_CHANGED_EVENT, {
@@ -140,13 +134,13 @@ export default function fastMode(pi: ExtensionAPI) {
 				notify(ctx, `Failed to save fast mode state: ${errorText(error)}`, "warning");
 			}
 		}
-		updateStatus(ctx);
+		publishActiveState(ctx);
 	});
 
 	// `active` depends on the model, so a model switch changes it without any
 	// change to `enabled`.
 	pi.on("model_select", (event, ctx) => {
-		updateStatus(ctx, event.model);
+		publishActiveState(ctx, event.model);
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
@@ -188,7 +182,7 @@ export default function fastMode(pi: ExtensionAPI) {
 			} catch (error) {
 				notify(ctx, `Fast mode changed but failed to save state: ${errorText(error)}`, "warning");
 			}
-			updateStatus(ctx);
+			publishActiveState(ctx);
 			notify(ctx, enabled ? "Fast mode on (1.5x speed, consumes usage limits ~2-2.5x faster)" : "Fast mode off", "info");
 		},
 	});
