@@ -263,11 +263,9 @@ export default function statusline(pi: ExtensionAPI): void {
 					if (model?.reasoning) modelText += color.model(` (${pi.getThinkingLevel()})`);
 					if (fastActive) modelText += separator() + color.session("fast");
 					const limits = visibleGroups(usage, model).flatMap((group) => group.parts.map((part) => {
-						const scope = group.kind === "spark" ? "Spark" : "";
-						const label = scope ? `${part.label} (${scope})` : part.label;
 						const remaining = Math.max(0, 100 - part.used);
 						return (part.window === "weekly" ? color.weekly : color.session)(
-							`${label} [${renderBar(remaining)}] ${remaining}% left`,
+							`${part.label} [${renderBar(remaining)}] ${remaining}% left`,
 						);
 					}));
 					const line = [project.join(separator()), modelText, color.context(contextLeft(ctx.getContextUsage(), model?.contextWindow ?? 0)), ...limits].join(separator());
