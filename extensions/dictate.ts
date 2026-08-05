@@ -103,6 +103,14 @@ async function openRealtimeSession(config) {
   const socket = connect(config.url, headersFor(config.credentials, config.feature, config.extraHeaders));
   const queue = [];
   let ready = config.sessionUpdate === undefined;
+  let resolveReady;
+  let rejectReady;
+  const readyPromise = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  if (ready)
+    resolveReady();
   let closed = false;
   let closing = false;
   let notified = false;
@@ -163,21 +171,40 @@ async function openRealtimeSession(config) {
       return;
     if (!ready && message.type === readyEvent) {
       ready = true;
+      resolveReady();
       for (const payload of queue.splice(0)) {
         try {
           socket.send(payload);
         } catch {}
       }
     }
+    if (!ready && message.type === "error")
+      rejectReady(new Error(message.error?.message ?? message.message ?? `${config.feature} session update failed`));
     config.onEvent?.(message);
   });
   socket.addEventListener("close", (event) => {
+    if (!ready)
+      rejectReady(new Error(`${config.feature} connection closed before session was ready`));
     finish({ code: event?.code, reason: event?.reason, expected: closing });
   });
   if (config.sessionUpdate !== undefined) {
     try {
       socket.send(JSON.stringify(config.sessionUpdate));
     } catch {}
+  }
+  if (!ready) {
+    try {
+      await Promise.race([
+        readyPromise,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error(`${config.feature} session update timed out`)),
+          config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
+        ))
+      ]);
+    } catch (error) {
+      hangUp();
+      throw error;
+    }
   }
   return {
     get ready() {
@@ -290,7 +317,7 @@ var TRANSCRIPTION_MODELS = [
   "gpt-transcribe"
 ];
 var TRANSCRIPTION_MODEL_DESCRIPTIONS = {
-  "gpt-live-transcribe": "Live deltas, low latency, coding hints",
+  "gpt-live-transcribe": "Live deltas, low latency, coding context",
   "gpt-transcribe": "Accuracy-focused, committed turns and files"
 };
 var DEFAULT_TRANSCRIPTION_MODEL = TRANSCRIPTION_MODELS[0];
@@ -301,7 +328,6 @@ var TRANSCRIPTION_PROMPT = [
   "Transcribe in English only, using unaccented English letters A-Z for words.",
   "Do not output any other language."
 ].join(" ");
-var TRANSCRIPTION_KEYWORDS = ["Pi", "TypeScript", "JavaScript", "Python", "Git", "GitHub", "tmux"];
 async function selectCurrent(ui, title, options, current, descriptions = {}) {
   const labels = options.map((option) => {
     const description = descriptions[option];
@@ -354,20 +380,11 @@ function hasNonAsciiLettersOrMarks(text) {
   );
 }
 async function openTranscription(signal, model, onTranscriptDelta) {
-  const transcription = model === "gpt-live-transcribe"
-    ? {
-        model,
-        prompt: TRANSCRIPTION_PROMPT,
-        languages: ["en"],
-        keywords: TRANSCRIPTION_KEYWORDS,
-        delay: "low"
-      }
-    : {
-        model,
-        prompt: TRANSCRIPTION_PROMPT,
-        languages: ["en"],
-        keywords: TRANSCRIPTION_KEYWORDS
-      };
+  const transcription = {
+    model,
+    language: "en",
+    prompt: TRANSCRIPTION_PROMPT
+  };
   const finalizeTimeoutMs = FINALIZE_TIMEOUT_MS;
   let done = false;
   let failure;

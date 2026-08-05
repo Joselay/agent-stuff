@@ -271,6 +271,13 @@ async function openRealtimeSession(config) {
   const socket = connect(config.url, headersFor(config.credentials, config.feature, config.extraHeaders));
   const queue = [];
   let ready = config.sessionUpdate === void 0;
+  let resolveReady;
+  let rejectReady;
+  const readyPromise = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  if (ready) resolveReady();
   let closed = false;
   let closing = false;
   let notified = false;
@@ -315,6 +322,7 @@ async function openRealtimeSession(config) {
     if (message === void 0 || message === null) return;
     if (!ready && message.type === readyEvent) {
       ready = true;
+      resolveReady();
       for (const payload of queue.splice(0)) {
         try {
           socket.send(payload);
@@ -322,15 +330,33 @@ async function openRealtimeSession(config) {
         }
       }
     }
+    if (!ready && message.type === "error") {
+      rejectReady(new Error(message.error?.message ?? message.message ?? `${config.feature} session update failed`));
+    }
     config.onEvent?.(message);
   });
   socket.addEventListener("close", (event) => {
+    if (!ready) rejectReady(new Error(`${config.feature} connection closed before session was ready`));
     finish({ code: event?.code, reason: event?.reason, expected: closing });
   });
   if (config.sessionUpdate !== void 0) {
     try {
       socket.send(JSON.stringify(config.sessionUpdate));
     } catch {
+    }
+  }
+  if (!ready) {
+    try {
+      await Promise.race([
+        readyPromise,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error(`${config.feature} session update timed out`)),
+          config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
+        ))
+      ]);
+    } catch (error) {
+      hangUp();
+      throw error;
     }
   }
   return {
@@ -1498,14 +1524,23 @@ function reduce(state, input, env) {
       state.visualState = "hearing";
       bargeIn();
       break;
+    case "conversation.input_transcript.delta":
     case "conversation.item.input_audio_transcription.delta":
       streamDelta("you", msg.delta ?? "");
       break;
+    case "conversation.input_transcript.turn_marked":
     case "conversation.item.input_audio_transcription.completed":
       if (alreadySettled(msg.item_id)) break;
       if (!state.openLine && msg.transcript) streamDelta("you", msg.transcript.trim());
       endLine("you");
       break;
+    case "conversation.item.input_audio_transcription.failed": {
+      const message = msg.error?.message ?? msg.message ?? "input transcription failed";
+      note(`transcription error: ${clip(String(message), 100)}`);
+      out.push({ kind: "notify", message: `talk transcription: ${clip(String(message), 150)}` });
+      endLine("you");
+      break;
+    }
     case "response.output_audio_transcript.delta":
     case "response.output_text.delta":
     case "response.audio_transcript.delta":
@@ -1728,12 +1763,11 @@ var TRANSCRIBE_MODELS = [
   "gpt-transcribe"
 ];
 var TRANSCRIBE_MODEL_DESCRIPTIONS = {
-  "gpt-live-transcribe": "Live deltas, low latency, coding hints",
+  "gpt-live-transcribe": "Live deltas, low latency, coding context",
   "gpt-transcribe": "Accuracy-focused, committed turns"
 };
 var DEFAULT_TRANSCRIBE_MODEL = TRANSCRIBE_MODELS[0];
 var TRANSCRIBE_PROMPT = "A software-development conversation. Preserve code identifiers, command names, technical product names, and spell this coding agent's name as Pi.";
-var TRANSCRIBE_KEYWORDS = ["Pi", "TypeScript", "JavaScript", "Python", "Git", "GitHub", "tmux"];
 async function selectCurrent2(ui, title, options, current, descriptions = {}) {
   const labels = options.map((option) => {
     const description = descriptions[option];
@@ -1829,20 +1863,11 @@ var TalkSession = class {
     const instructions = startupContext ? `${prompt}
 
 ${startupContext}` : prompt;
-    const transcription = this.transcribeModel === "gpt-live-transcribe"
-      ? {
-          model: this.transcribeModel,
-          prompt: TRANSCRIBE_PROMPT,
-          ...LANGUAGE ? { languages: [LANGUAGE] } : {},
-          keywords: TRANSCRIBE_KEYWORDS,
-          delay: "low"
-        }
-      : {
-          model: this.transcribeModel,
-          prompt: TRANSCRIBE_PROMPT,
-          ...LANGUAGE ? { languages: [LANGUAGE] } : {},
-          keywords: TRANSCRIBE_KEYWORDS
-        };
+    const transcription = {
+      model: this.transcribeModel,
+      prompt: TRANSCRIBE_PROMPT,
+      ...LANGUAGE ? { language: LANGUAGE } : {}
+    };
     this.session = await openRealtimeSession({
       url: `${REALTIME_URL}?model=${encodeURIComponent(this.model)}`,
       feature: "talk",
