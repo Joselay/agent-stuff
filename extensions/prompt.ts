@@ -30,26 +30,12 @@ function statePath(name: string): string {
 	return join(directory, name);
 }
 
-function legacyStatePath(name: string): string {
-	const cacheRoot = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-	return join(cacheRoot, "pi", "recall", name);
-}
-
 function readState<T>(name: string, parse: (value: unknown) => T | undefined): T | undefined {
-	const current = statePath(name);
-	for (const path of [current, legacyStatePath(name)]) {
-		try {
-			const value = parse(JSON.parse(readFileSync(path, "utf8")));
-			if (value === undefined) continue;
-			if (path !== current) {
-				try {
-					writeState(name, value);
-				} catch {}
-			}
-			return value;
-		} catch {}
+	try {
+		return parse(JSON.parse(readFileSync(statePath(name), "utf8")));
+	} catch {
+		return undefined;
 	}
-	return undefined;
 }
 
 function writeState(name: string, value: unknown): void {
@@ -240,7 +226,7 @@ function installEditor(pi: ExtensionAPI, ctx: ExtensionContext, state: EditorSta
 }
 
 export default function promptExtension(pi: ExtensionAPI): void {
-	const recallEnabled = process.env.PI_SUBAGENT !== "1";
+	const historyEnabled = process.env.PI_SUBAGENT !== "1";
 	let root = "";
 	let browsePosition = 0;
 	let historyTotal = 0;
@@ -248,11 +234,11 @@ export default function promptExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		browsePosition = 0;
-		if (recallEnabled) root = projectRoot(ctx.cwd);
+		if (historyEnabled) root = projectRoot(ctx.cwd);
 		if (ctx.mode !== "tui") return;
 
 		let history: string[] = [];
-		if (recallEnabled) {
+		if (historyEnabled) {
 			const sessionPrompts = ctx.sessionManager
 				.buildContextEntries()
 				.map(userPrompt)
@@ -277,7 +263,7 @@ export default function promptExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("input", (event, ctx) => {
-		if (!recallEnabled) return;
+		if (!historyEnabled) return;
 		browsePosition = 0;
 		try {
 			const store = readStore();
