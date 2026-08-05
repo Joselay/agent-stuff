@@ -44,7 +44,10 @@ const CreateGoalParams = Type.Object({
 			"Required. The concrete objective to start pursuing. This starts a new active goal when no unfinished goal exists. If the previous goal is complete, it is replaced.",
 	}),
 	token_budget: Type.Optional(
-		Type.Number({ description: "Optional positive integer token budget for the new goal. Omit unless explicitly requested." }),
+		Type.Integer({
+			minimum: 1,
+			description: "Optional positive integer token budget for the new goal. Omit unless explicitly requested.",
+		}),
 	),
 });
 
@@ -54,10 +57,6 @@ const UpdateGoalParams = Type.Object({
 
 function nowSeconds(): number {
 	return Math.floor(Date.now() / 1000);
-}
-
-function cloneGoal(goal: Goal): Goal {
-	return { ...goal };
 }
 
 function addElapsedMilliseconds(goal: Goal, elapsedMs: number): void {
@@ -79,9 +78,10 @@ function validateObjective(input: string): string {
 	if (!objective) {
 		throw new Error("goal objective must not be empty");
 	}
-	if (charCount(objective) > MAX_OBJECTIVE_CHARS) {
+	const length = charCount(objective);
+	if (length > MAX_OBJECTIVE_CHARS) {
 		throw new Error(
-			`Goal objective is too long: ${charCount(objective).toLocaleString()} characters. Limit: ${MAX_OBJECTIVE_CHARS.toLocaleString()} characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.`,
+			`Goal objective is too long: ${length.toLocaleString()} characters. Limit: ${MAX_OBJECTIVE_CHARS.toLocaleString()} characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.`,
 		);
 	}
 	return objective;
@@ -184,6 +184,8 @@ function formatElapsedSeconds(totalSeconds: number): string {
 
 function assistantUsageTokens(messages: unknown[]): number {
 	let total = 0;
+	const tokenCount = (value: unknown) =>
+		typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
 	for (const message of messages) {
 		if (!message || typeof message !== "object") continue;
 		const msg = message as {
@@ -191,13 +193,13 @@ function assistantUsageTokens(messages: unknown[]): number {
 			usage?: { input?: number; output?: number; cacheRead?: number; totalTokens?: number };
 		};
 		if (msg.role !== "assistant" || !msg.usage) continue;
-		const input = Math.max(0, msg.usage.input ?? 0);
-		const cacheRead = Math.max(0, msg.usage.cacheRead ?? 0);
-		const output = Math.max(0, msg.usage.output ?? 0);
+		const input = tokenCount(msg.usage.input);
+		const cacheRead = tokenCount(msg.usage.cacheRead);
+		const output = tokenCount(msg.usage.output);
 		const measured = Math.max(0, input - cacheRead) + output;
-		total += measured > 0 ? measured : Math.max(0, msg.usage.totalTokens ?? 0);
+		total += measured > 0 ? measured : tokenCount(msg.usage.totalTokens);
 	}
-	return total;
+	return Math.floor(total);
 }
 
 function isUnfinishedGoal(goal: Goal): boolean {
@@ -371,10 +373,6 @@ function lastAssistantMessage(messages: Array<{ role?: string; stopReason?: stri
 	return undefined;
 }
 
-function wasLastAssistantAborted(messages: Array<{ role?: string; stopReason?: string }>): boolean {
-	return lastAssistantMessage(messages)?.stopReason === "aborted";
-}
-
 function goalStopStatusForAssistantError(message: { errorMessage?: string } | undefined): GoalStatus {
 	const errorMessage = message?.errorMessage ?? "";
 	return /\b(usage|rate|quota|limit)\b/i.test(errorMessage) ? "usageLimited" : "blocked";
@@ -389,7 +387,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	function currentGoalSnapshot(): Goal | null {
 		if (!goal) return null;
-		const snapshot = cloneGoal(goal);
+		const snapshot = { ...goal };
 		if (snapshot.status === "active" && activeSinceMonotonicMs !== null) {
 			addElapsedMilliseconds(snapshot, performance.now() - activeSinceMonotonicMs);
 		}
@@ -411,7 +409,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		pi.appendEntry(STATE_TYPE, {
 			version: 2,
 			action,
-			goal: goal ? cloneGoal(goal) : null,
+			goal: goal ? { ...goal } : null,
 		} satisfies PersistedGoalState);
 	}
 
@@ -650,7 +648,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		if (wasLastAssistantAborted(event.messages)) {
+		if (lastAssistant?.stopReason === "aborted") {
 			if (!ctx.hasUI) {
 				setGoalStatus("paused");
 				persist("status");
