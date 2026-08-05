@@ -2096,6 +2096,14 @@ function talk(pi) {
   pi.on("session_shutdown", () => active?.stop(false));
   pi.registerCommand("talk", {
     description: "Start live voice conversation; use off or config",
+    getArgumentCompletions: (prefix) => {
+      const actions = [
+        { value: "on", label: "on", description: "Start with saved configuration" },
+        { value: "off", label: "off", description: "Stop the active conversation" },
+        { value: "config", label: "config", description: "Choose model, reasoning, voice, and transcription" }
+      ].filter((item) => item.value.startsWith(prefix.trim().toLowerCase()));
+      return actions.length ? actions : null;
+    },
     handler: async (args, ctx) => {
       if (process.platform !== "darwin") {
         notify(ctx, "Talk requires macOS (AVFoundation audio)", "warning");

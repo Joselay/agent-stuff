@@ -883,6 +883,14 @@ function dictate(pi: ExtensionAPI) {
   });
   pi.registerCommand("dictate", {
     description: "Show dictation status; use on|off or config",
+    getArgumentCompletions: (prefix) => {
+      const actions = [
+        { value: "on", label: "on", description: "Enable hold-backtick dictation" },
+        { value: "off", label: "off", description: "Disable dictation" },
+        { value: "config", label: "config", description: "Choose transcription model" }
+      ].filter((item) => item.value.startsWith(prefix.trim().toLowerCase()));
+      return actions.length ? actions : null;
+    },
     handler: async (args, context) => {
       if (!SUPPORTED) {
         notify(context, "Dictation requires macOS", "warning");
@@ -898,8 +906,8 @@ function dictate(pi: ExtensionAPI) {
         return;
       }
       if (action === "config") {
-        if (context.mode !== "tui") {
-          notify(context, "Dictation configuration requires TUI mode", "warning");
+        if (!context.hasUI) {
+          notify(context, "Dictation configuration requires interactive mode", "warning");
           return;
         }
         const selected = await selectCurrent(
