@@ -12,6 +12,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 
 const SKILL_PREFIX = "skill:";
@@ -28,9 +29,6 @@ const SKILL_COLORS: ThemeColor[] = [
 	"thinkingMax",
 ];
 
-// Additional distinct colors from sdras/night-owl-vscode-theme's original
-// dark token palette. These are used only after the active theme's unique
-// colors are occupied.
 const NIGHT_OWL_SKILL_COLORS = [
 	"#a2bffc",
 	"#ecc48d",
@@ -62,9 +60,7 @@ type SkillMeta = {
 
 type SkillIndex = {
 	byName: Map<string, SkillMeta>;
-	reserved: Set<string>;
 	names: string[];
-	/** Precompiled once per index: the editor re-renders on every frame. */
 	pattern?: RegExp;
 };
 
@@ -73,10 +69,6 @@ type SkillToken = {
 	query: string;
 };
 
-/**
- * Capabilities pi's Editor exposes but the EditorComponent contract does not
- * require, so every use is feature-checked before calling.
- */
 type SkillAwareEditor = EditorComponent & {
 	focused?: boolean;
 	getCursor?: () => { line: number; col: number };
@@ -88,10 +80,6 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 	const byName = new Map<string, SkillMeta>();
 	const commands = pi.getCommands();
 
-	// Every command that is not a skill reserves its own name. Two passes,
-	// because a name is reserved regardless of where it appears in the list —
-	// this used to be a hand-written set of 27 builtins, which the host will
-	// simply tell us, and which said nothing about the user's own commands.
 	const reserved = new Set<string>(
 		commands.filter((command) => command.source !== "skill").map((command) => command.name),
 	);
@@ -108,7 +96,7 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 		byName.set(name, { description: command.description ?? "", filePath, baseDir });
 	}
 
-	const names = [...byName.keys()].sort((a, b) => b.length - a.length || a.localeCompare(b));
+	const names = [...byName.keys()].sort((a, b) => a.length - b.length || a.localeCompare(b));
 	const pattern =
 		names.length > 0
 			? new RegExp(
@@ -116,16 +104,9 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 					"g",
 				)
 			: undefined;
-	return { byName, reserved, names, pattern };
+	return { byName, names, pattern };
 }
 
-/**
- * Rendering and keystroke handling both need the index, so rebuilding it per
- * frame would mean re-walking every command, re-sorting, and recompiling the
- * highlight pattern dozens of times a second. Skills only change on reload,
- * which restarts the extension; the TTL just bounds staleness for commands
- * other extensions register after us.
- */
 export function createIndexCache(pi: ExtensionAPI, ttlMs = 2000): { get: () => SkillIndex; invalidate: () => void } {
 	let cached: SkillIndex | undefined;
 	let loadedAt = 0;
@@ -145,17 +126,6 @@ export function createIndexCache(pi: ExtensionAPI, ttlMs = 2000): { get: () => S
 	};
 }
 
-/**
- * A whole message that is just a skill command, in pi's short form.
- *
- * pi expands `/skill:name args` itself (AgentSession._expandSkillCommand, which
- * runs after this hook) by *replacing* the message with the skill block, so the
- * model never sees the command. Short-form `/name` is this extension's sugar and
- * pi does not know it, so it has to expand the same way — prepending a block and
- * leaving the command in place would both leak `/name` into the prompt and, for
- * the long form, stop the text from starting with `/skill:` and suppress pi's
- * own expansion.
- */
 export function splitSkillCommand(
 	text: string,
 	index: SkillIndex,
@@ -167,13 +137,32 @@ export function splitSkillCommand(
 }
 
 function findSkillMentions(text: string, index: SkillIndex): string[] {
-	const re = /(?:^|[\s([{])\/(?:skill:)?([a-z0-9]+(?:-[a-z0-9]+)*)/g;
-	const found: string[] = [];
-	for (const match of text.matchAll(re)) {
-		const name = match[1];
-		if (name && index.byName.has(name) && !found.includes(name)) found.push(name);
-	}
-	return found;
+	if (!index.pattern) return [];
+	index.pattern.lastIndex = 0;
+	return [
+		...new Set(
+			[...text.matchAll(index.pattern)].map((match) => skillNameFromToken(match[2] ?? "")),
+		),
+	];
+}
+
+function replaceSkillMentionsWithPaths(text: string, index: SkillIndex): string {
+	if (!index.pattern) return text;
+	index.pattern.lastIndex = 0;
+	return text.replace(index.pattern, (_match, boundary: string, token: string) => {
+		const name = skillNameFromToken(token);
+		const filePath = index.byName.get(name)?.filePath;
+		return filePath ? `${boundary}${shortenHomePath(filePath)}` : `${boundary}${token}`;
+	});
+}
+
+function skillNameFromToken(token: string): string {
+	return token.slice(token.startsWith(`/${SKILL_PREFIX}`) ? SKILL_PREFIX.length + 1 : 1);
+}
+
+function shortenHomePath(filePath: string): string {
+	const home = homedir();
+	return filePath.startsWith(`${home}/`) ? `~/${filePath.slice(home.length + 1)}` : filePath;
 }
 
 function buildSkillBlock(name: string, meta: SkillMeta): string | undefined {
@@ -198,17 +187,13 @@ function colorForSkill(
 		id: theme.getFgAnsi(color),
 		paint: (text) => theme.fg(color, text),
 	}));
-	const nightOwlCandidates: SkillColor[] = [];
-	for (const hex of NIGHT_OWL_SKILL_COLORS) {
+	const nightOwlCandidates: SkillColor[] = NIGHT_OWL_SKILL_COLORS.map((hex) => {
 		const ansi = hexToForegroundAnsi(hex);
-		nightOwlCandidates.push({ id: ansi, paint: (text) => `${ansi}${text}\x1b[39m` });
-	}
+		return { id: ansi, paint: (text) => `${ansi}${text}\x1b[39m` };
+	});
 
 	let hash = 0;
 	for (let i = 0; i < name.length; i++) hash = (hash * 33 + name.charCodeAt(i)) >>> 0;
-	// Different semantic tokens can resolve to the same actual color in a
-	// theme (for example warning and syntaxType). Compare their ANSI values,
-	// not merely their token names.
 	const used = new Set([...assigned.values()].map((color) => color.id));
 	for (const candidates of [themeCandidates, nightOwlCandidates]) {
 		const preferred = hash % candidates.length;
@@ -221,7 +206,6 @@ function colorForSkill(
 		}
 	}
 
-	// More visible skills than palette entries: reuse the deterministic color.
 	const color = nightOwlCandidates[hash % nightOwlCandidates.length]!;
 	assigned.set(name, color);
 	return color;
@@ -253,32 +237,20 @@ function needsSpacer(editor: SkillAwareEditor): boolean {
 	return !after.startsWith(" ");
 }
 
-/**
- * pi's slash palette, mirroring Editor.isSlashMenuAllowed/isInSlashCommandContext:
- * the first line, starting with a slash. That palette is pi's to own — it lists
- * every command including `skill:` entries — so inline suggestions stay out of
- * it and only cover mid-prompt mentions, where pi offers no dropdown at all.
- */
 export function inSlashPalette(cursorLine: number, beforeCursor: string): boolean {
 	return cursorLine === 0 && beforeCursor.trimStart().startsWith("/");
 }
 
-/** Skill names that extend the typed query, best (shortest, then alphabetical) first. */
 export function ghostCandidates(index: SkillIndex, query: string): string[] {
 	if (!query) return [];
-	return index.names
-		.filter((name) => name.length > query.length && name.startsWith(query))
-		.sort((a, b) => a.length - b.length || a.localeCompare(b));
+	return index.names.filter((name) => name.length > query.length && name.startsWith(query));
 }
 
-/** The text an inline suggestion would append at the cursor, if any. */
 function ghostSuffix(editor: SkillAwareEditor, index: SkillIndex): string | undefined {
 	if (editor.getCursor && editor.getLines) {
 		const cursor = editor.getCursor();
 		const line = editor.getLines()[cursor.line] ?? "";
 		if (inSlashPalette(cursor.line, line.slice(0, cursor.col))) return undefined;
-		// Only when the cursor sits at the end of the token — completing into the
-		// middle of a word would splice the suggestion around the existing tail.
 		const after = line.slice(cursor.col);
 		if (after !== "" && !after.startsWith(" ")) return undefined;
 	}
@@ -289,25 +261,9 @@ function ghostSuffix(editor: SkillAwareEditor, index: SkillIndex): string | unde
 	return best?.slice(token.query.length);
 }
 
-/**
- * pi-tui draws the editor cursor as one reverse-video grapheme (SGR 7, reset by
- * SGR 0). pi 0.83 has no inline-suggestion API, so decorating that cell is how
- * an extension puts a suggestion inside the input — the same rendered-line
- * decoration that docs/tui.md Pattern 7 uses for its mode indicator. Every
- * lookup below is checked, so an unrecognised render simply gets no suggestion.
- */
 const CURSOR_CELL_START = "\x1b[7m";
 const CURSOR_CELL_END = "\x1b[0m";
 
-/**
- * Paint the suggestion starting in the cursor's own cell, borrowing columns
- * from the line's trailing padding so the editor keeps its width.
- *
- * The cursor cell is what makes the preview line up: the suggestion has to
- * start *under* the cursor rather than after it, otherwise it previews one
- * column right of where accepting it puts the text, and the token appears to
- * jump left on Tab.
- */
 export function injectGhost(
 	lines: string[],
 	ghost: string,
@@ -327,9 +283,6 @@ export function injectGhost(
 	const trailing = after.trimEnd();
 	const padding = visibleWidth(after) - visibleWidth(trailing);
 
-	// Nothing but padding behind a blank cursor cell means the cell is the
-	// editor's synthetic end-of-text space, so the suggestion may overwrite it
-	// and gain a column. Otherwise the cell holds real text, which shifts right.
 	const cursorAtLineEnd = cursorGrapheme === " " && trailing === "";
 	const budget = cursorAtLineEnd ? padding + 1 : padding;
 
@@ -349,7 +302,6 @@ export function injectGhost(
 		after;
 
 	const next = [...lines];
-	// Give back exactly what was borrowed: same visible width as pi rendered.
 	next[lineIndex] = truncateToWidth(painted, visibleWidth(line), "");
 	return next;
 }
@@ -363,8 +315,7 @@ function highlightSkillTokens(
 	if (!index.pattern || !line.includes("/")) return line;
 
 	return line.replace(index.pattern, (_match, boundary: string, token: string) => {
-		const name = token.startsWith("/skill:") ? token.slice("/skill:".length) : token.slice(1);
-		if (!index.byName.has(name)) return `${boundary}${token}`;
+		const name = skillNameFromToken(token);
 		return `${boundary}${colorForSkill(name, assignedColors, theme).paint(token)}`;
 	});
 }
@@ -373,11 +324,6 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Suggestions themselves are left entirely to pi: the slash palette keeps
- * listing skills the way it ships. This layer only declines path completion for
- * a mid-prompt skill mention, which the inline suggestion handles instead.
- */
 function createSkillAutocompleteProvider(
 	current: AutocompleteProvider,
 	getIndex: () => SkillIndex,
@@ -411,11 +357,6 @@ function createSkillAutocompleteProvider(
 	};
 }
 
-/**
- * Decorates whichever editor is configured, rather than subclassing
- * CustomEditor: other editor extensions may already be installed, and only the
- * documented previous-factory composition keeps all of them working.
- */
 function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void {
 	const previousEditor = ctx.ui.getEditorComponent();
 
@@ -428,8 +369,6 @@ function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void 
 			const base = render(width);
 			try {
 				const index = getIndex();
-				// Resolve colors across the whole visible editor so distinct skills
-				// cannot collide while palette entries remain available.
 				const assignedColors = new Map<string, SkillColor>();
 				const lines = base.map((line) =>
 					highlightSkillTokens(line, index, ctx.ui.theme, assignedColors),
@@ -481,16 +420,13 @@ export default function skillsExtension(pi: ExtensionAPI) {
 	pi.on("input", async (event) => {
 		if (event.source === "extension") return;
 
-		// pi expands its own `/skill:name` command right after this hook.
 		if (event.text.startsWith(`/${SKILL_PREFIX}`)) return;
 
 		try {
 			const index = getIndex();
 
-			// A message that is only a skill command expands like pi's does: the
-			// command is replaced, never sent alongside the skill.
 			const command = splitSkillCommand(event.text, index);
-			if (command) {
+			if (command && findSkillMentions(command.args, index).length === 0) {
 				const block = buildSkillBlock(command.name, index.byName.get(command.name)!);
 				if (!block) return;
 				return {
@@ -502,16 +438,9 @@ export default function skillsExtension(pi: ExtensionAPI) {
 			const mentions = findSkillMentions(event.text, index);
 			if (mentions.length === 0) return;
 
-			const blocks: string[] = [];
-			for (const name of mentions) {
-				const block = buildSkillBlock(name, index.byName.get(name)!);
-				if (block) blocks.push(block);
-			}
-			if (blocks.length === 0) return;
-
 			return {
 				action: "transform",
-				text: `${blocks.join("\n\n")}\n\n${event.text}`,
+				text: replaceSkillMentionsWithPaths(event.text, index),
 			};
 		} catch {
 			return;
