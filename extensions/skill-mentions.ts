@@ -1,13 +1,3 @@
-/**
- * Skill mentions extension
- *
- * - Short `/name` skill commands expand like native `/skill:name`
- * - Inline `/name` or `/skill:name` mentions rewrite to skill file paths
- * - TUI: ghost completion for skill names
- *
- * Defers sole `/skill:...` commands to native expansion.
- */
-
 import {
 	CustomEditor,
 	stripFrontmatter,
@@ -64,13 +54,11 @@ function loadSkillIndex(pi: ExtensionAPI): SkillIndex {
 			: command.name;
 		if (!name || reserved.has(name)) continue;
 		if (byName.has(name)) continue;
-		// sourceInfo is canonical provenance (extensions.md)
 		const filePath = command.sourceInfo?.path ?? "";
 		const baseDir = command.sourceInfo?.baseDir ?? (filePath ? dirname(filePath) : "");
 		byName.set(name, { description: command.description ?? "", filePath, baseDir });
 	}
 
-	// Longest-first so regex alternation prefers full skill names
 	const names = [...byName.keys()].sort((a, b) => b.length - a.length || a.localeCompare(b));
 	const pattern =
 		names.length > 0
@@ -127,7 +115,6 @@ function replaceSkillMentionsWithPaths(text: string, index: SkillIndex): string 
 	return text.replace(index.pattern, (_match, boundary: string, token: string) => {
 		const name = skillNameFromToken(token);
 		const filePath = index.byName.get(name)?.filePath;
-		// Absolute paths match native skill <location> + skills.md guidance
 		return filePath ? `${boundary}${filePath}` : `${boundary}${token}`;
 	});
 }
@@ -140,7 +127,6 @@ function buildSkillBlock(name: string, meta: SkillMeta): string | undefined {
 	if (!meta.filePath) return undefined;
 	try {
 		const body = stripFrontmatter(readFileSync(meta.filePath, "utf-8")).trim();
-		// Same shape as AgentSession._expandSkillCommand
 		return `<skill name="${name}" location="${meta.filePath}">\nReferences are relative to ${meta.baseDir}.\n\n${body}\n</skill>`;
 	} catch {
 		return undefined;
@@ -174,7 +160,6 @@ export function inSlashPalette(cursorLine: number, beforeCursor: string): boolea
 
 export function ghostCandidates(index: SkillIndex, query: string): string[] {
 	if (!query) return [];
-	// Prefer shortest completion for ghost text (independent of regex name order)
 	return index.names
 		.filter((name) => name.length > query.length && name.startsWith(query))
 		.sort((a, b) => a.length - b.length || a.localeCompare(b));
@@ -271,7 +256,6 @@ function createSkillAutocompleteProvider(
 					return false;
 				}
 			} catch {
-				// fall through to current provider
 			}
 			return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
 		},
@@ -312,7 +296,6 @@ function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void 
 					}
 				}
 			} catch {
-				// fall through to default input handling
 			}
 
 			handleInput(data);
@@ -335,16 +318,13 @@ export default function skillsExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event) => {
-		// Skip extension-injected messages (extensions.md)
 		if (event.source === "extension") return;
 
-		// Native expands sole `/skill:name` — leave them alone
 		if (event.text.startsWith(`/${SKILL_PREFIX}`)) return;
 
 		try {
 			const index = getIndex();
 
-			// Short `/name [args]` → same skill block as native `/skill:name`
 			const command = splitSkillCommand(event.text, index);
 			if (command) {
 				const block = buildSkillBlock(command.name, index.byName.get(command.name)!);
@@ -359,7 +339,6 @@ export default function skillsExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			// Inline mentions → absolute skill paths (progressive disclosure via read)
 			const mentions = findSkillMentions(event.text, index);
 			if (mentions.length === 0) return;
 
