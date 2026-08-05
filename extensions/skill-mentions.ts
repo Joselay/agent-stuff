@@ -338,7 +338,7 @@ function createSkillAutocompleteProvider(
 
 /**
  * Decorates whichever editor is configured, rather than subclassing
- * CustomEditor: `prompt` and `dictate` install editors too, and only the
+ * CustomEditor: other editor extensions may already be installed, and only the
  * documented previous-factory composition keeps all of them working.
  */
 function installEditor(ctx: ExtensionContext, getIndex: () => SkillIndex): void {

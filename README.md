@@ -22,6 +22,12 @@ Skills live in [`skills`](skills). Each skill has a `SKILL.md` plus any helper f
 
 Pi extensions live in [`extensions`](extensions):
 
+Extension source files do not import other files from this repository, so each
+`.ts` entry can be copied independently. Runtime assets and external tools are
+not bundled: notably, `notify.ts` expects
+`~/.cache/pi/notify/notification.mp3` to already exist. Integrations may also
+require their named platform, executable, credentials, or network access.
+
 - [`answer.ts`](extensions/answer.ts) - `/answer` plus `ctrl+.` to extract and answer questions from the last assistant message.
 - [`btw.ts`](extensions/btw.ts) - `/btw` side-chat popover for quick tangential questions.
 - [`continue.ts`](extensions/continue.ts) - `shift+alt+enter` sends `continue` when the agent is stopped.
@@ -37,7 +43,9 @@ Pi extensions live in [`extensions`](extensions):
 - [`handoff.ts`](extensions/handoff.ts) - `/handoff` summarizes the conversation and continues in a fresh linked session.
 - [`no-sleep.ts`](extensions/no-sleep.ts) - Prevents macOS sleep while Pi is active.
 - [`notify.ts`](extensions/notify.ts) - Plays a notification sound when the agent finishes.
-- [`prompt.ts`](extensions/prompt.ts) - Adds project-scoped history, Bash mode, and session-name chrome to the editor.
+- [`bash-mode.ts`](extensions/bash-mode.ts) - Adds a Bash-mode indicator to the editor.
+- [`recall.ts`](extensions/recall.ts) - Adds project-scoped prompt history to the editor.
+- [`session-name.ts`](extensions/session-name.ts) - Adds session-name chrome to the editor.
 - [`reset.ts`](extensions/reset.ts) - `/reset` redeems OpenAI Codex usage resets.
 - [`review.ts`](extensions/review.ts) - `/review` reviews pull requests, branches, commits, folders, or local changes.
 - [`skill-mentions.ts`](extensions/skill-mentions.ts) - Adds short skill commands, inline mentions, highlighting, and completion.

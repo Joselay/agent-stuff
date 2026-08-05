@@ -25,7 +25,11 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { DICTATE_EDITOR_BRIDGE, type DictateEditorBridge } from "./dictate";
+
+const DICTATE_EDITOR_BRIDGE = Symbol.for("pi.dictate.editorBridge");
+type DictateEditorBridge = {
+	decorate<T extends { insertTextAtCursor?(text: string): void; [key: string]: any }>(editor: T, tui: TUI): T;
+};
 
 // Structured output format for question extraction
 interface ExtractedQuestion {
