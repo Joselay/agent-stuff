@@ -222,12 +222,12 @@ async function openRealtimeSession(config) {
 // Inlined from extensions/lib/state.ts
 var FILE_MODE = 0o600;
 function statePath(name) {
-  const dir = join(getAgentDir(), "state");
+  const dir = join(homedir(), ".cache", "pi", "dictate");
   mkdirSync(dir, { recursive: true });
   return join(dir, name);
 }
 function legacyStatePath(name) {
-  return join(homedir(), ".cache", "pi", "dictate", name);
+  return join(getAgentDir(), "state", name);
 }
 function readState(name, parse) {
   let raw;
@@ -285,7 +285,15 @@ var STDERR_TAIL = 4000;
 var HOLD_TRIGGER_MS = 350;
 var AUTH_HINT2 = "run /login if this persists";
 var REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription";
-var TRANSCRIPTION_MODEL = "gpt-transcribe";
+var TRANSCRIPTION_MODELS = [
+  "gpt-live-transcribe",
+  "gpt-transcribe"
+];
+var TRANSCRIPTION_MODEL_DESCRIPTIONS = {
+  "gpt-live-transcribe": "Live deltas, low latency, coding hints",
+  "gpt-transcribe": "Accuracy-focused, committed turns and files"
+};
+var DEFAULT_TRANSCRIPTION_MODEL = TRANSCRIPTION_MODELS[0];
 var TRANSCRIPTION_PROMPT = [
   "The speaker always dictates in English about software development, coding, and programming.",
   "Preserve programming terms, code identifiers, command names, and technical product names.",
@@ -293,6 +301,17 @@ var TRANSCRIPTION_PROMPT = [
   "Transcribe in English only, using unaccented English letters A-Z for words.",
   "Do not output any other language."
 ].join(" ");
+var TRANSCRIPTION_KEYWORDS = ["Pi", "TypeScript", "JavaScript", "Python", "Git", "GitHub", "tmux"];
+async function selectCurrent(ui, title, options, current, descriptions = {}) {
+  const labels = options.map((option) => {
+    const description = descriptions[option];
+    return `${option === current ? "\u2713 " : "  "}${option}${description ? ` \u2014 ${description}` : ""}`;
+  });
+  const selected = await ui.select(title, labels);
+  if (!selected)
+    return;
+  return options[labels.indexOf(selected)];
+}
 var RECORDING_FRAMES = ["▁▁▂▃▂▁▁", "▁▂▃▅▃▂▁", "▂▃▅▇▅▃▂", "▃▅▇█▇▅▃", "▂▃▅▇▅▃▂", "▁▂▃▅▃▂▁"];
 var TRANSCRIBING_FRAMES = ["·  ", "·· ", "···"];
 
@@ -334,16 +353,26 @@ function hasNonAsciiLettersOrMarks(text) {
     (character) => /[\p{L}\p{M}]/u.test(character) && !/[A-Za-z]/.test(character)
   );
 }
-async function openTranscription(signal) {
-  const transcription = {
-    model: TRANSCRIPTION_MODEL,
-    language: "en",
-    prompt: TRANSCRIPTION_PROMPT
-  };
+async function openTranscription(signal, model, onTranscriptDelta) {
+  const transcription = model === "gpt-live-transcribe"
+    ? {
+        model,
+        prompt: TRANSCRIPTION_PROMPT,
+        languages: ["en"],
+        keywords: TRANSCRIPTION_KEYWORDS,
+        delay: "low"
+      }
+    : {
+        model,
+        prompt: TRANSCRIPTION_PROMPT,
+        languages: ["en"],
+        keywords: TRANSCRIPTION_KEYWORDS
+      };
   const finalizeTimeoutMs = FINALIZE_TIMEOUT_MS;
   let done = false;
   let failure;
   let finalText = "";
+  let partialText = "";
   let detectedLanguages = [];
   let settle;
   const finishTimer = new Timer;
@@ -372,8 +401,15 @@ async function openTranscription(signal) {
     },
     onEvent: (message) => {
       switch (message.type) {
+        case "conversation.input_transcript.delta":
+        case "conversation.item.input_audio_transcription.delta":
+          partialText += String(message.delta ?? "");
+          onTranscriptDelta?.(partialText);
+          break;
+        case "conversation.input_transcript.turn_marked":
         case "conversation.item.input_audio_transcription.completed":
           finalText = String(message.transcript ?? "");
+          onTranscriptDelta?.(finalText);
           detectedLanguages = Array.isArray(message.languages)
             ? message.languages.map((entry) => typeof entry === "string" ? entry : entry?.code).filter(Boolean)
             : [];
@@ -407,6 +443,7 @@ async function openTranscription(signal) {
     cancel() {
       done = true;
       close();
+      settle?.();
     },
     async finish() {
       if (!done && !failure) {
@@ -430,12 +467,15 @@ async function openTranscription(signal) {
     }
   };
 }
-var DEFAULT_STATE = { enabled: false };
+var DEFAULT_STATE = { enabled: false, model: DEFAULT_TRANSCRIPTION_MODEL };
 function readDictateState() {
   const persisted = readState(STATE_FILE, (value) => {
     if (!isRecord(value))
       return;
-    return { enabled: value.enabled === true };
+    const model = typeof value.model === "string" && TRANSCRIPTION_MODELS.includes(value.model)
+      ? value.model
+      : DEFAULT_TRANSCRIPTION_MODEL;
+    return { enabled: value.enabled === true, model };
   });
   return persisted ?? DEFAULT_STATE;
 }
@@ -447,6 +487,7 @@ function supportsDictation(editor) {
 }
 function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, holdMs = HOLD_TRIGGER_MS) {
   let dictationState = "idle";
+  let liveTranscript = "";
   let animationFrame = 0;
   let animationTimer;
   let holdTimer;
@@ -488,6 +529,8 @@ function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, hol
   };
   const setDictationState = (state) => {
     dictationState = state;
+    if (state === "idle" || state === "recording")
+      liveTranscript = "";
     animationFrame = 0;
     stopAnimation();
     if (state !== "idle") {
@@ -496,6 +539,10 @@ function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, hol
         tui.requestRender();
       }, 120);
     }
+    tui.requestRender();
+  };
+  const setDictationTranscript = (text) => {
+    liveTranscript = String(text ?? "").replace(/\s+/g, " ").trim();
     tui.requestRender();
   };
   const originalHandleInput = editor.handleInput;
@@ -551,7 +598,12 @@ function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, hol
       return lines;
     const frames = dictationState === "recording" ? RECORDING_FRAMES : TRANSCRIBING_FRAMES;
     const frame = frames[animationFrame % frames.length];
-    const label = ` ${frame} `;
+    const transcriptLimit = Math.max(12, width - 20);
+    const visibleTranscript = liveTranscript.length > transcriptLimit
+      ? `\u2026${liveTranscript.slice(-(transcriptLimit - 1))}`
+      : liveTranscript;
+    const transcript = visibleTranscript ? ` ${visibleTranscript}\u258C` : "";
+    const label = ` ${frame}${transcript} `;
     for (let index = 1;index < lines.length - 1; index++) {
       const line = lines[index];
       const marker = line.indexOf(CURSOR_MARKER);
@@ -571,6 +623,7 @@ function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, hol
     insertTranscription,
     endTranscription,
     setDictationState,
+    setDictationTranscript,
     disposeDictation: () => {
       cancelHold();
       stopAnimation();
@@ -582,7 +635,7 @@ function decorateDictationEditor(editor, tui, isEnabled, setDictationActive, hol
 }
 var SUPPORTED = process.platform === "darwin";
 function dictate(pi: ExtensionAPI) {
-  let { enabled } = readDictateState();
+  let { enabled, model } = readDictateState();
   let currentEditor;
   let ctx: ExtensionContext | undefined;
   let generation = 0;
@@ -597,6 +650,7 @@ function dictate(pi: ExtensionAPI) {
   let starting;
   let startController;
   let transcribing = false;
+  let finishingSession;
   let dictating = false;
   const maxTimer = new Timer;
   async function settled() {
@@ -664,7 +718,14 @@ function dictate(pi: ExtensionAPI) {
         }
         recording = item;
         editor.setDictationState("recording");
-        const session = await openTranscription(controller.signal);
+        const session = await openTranscription(
+          controller.signal,
+          model,
+          (text) => {
+            if (token === generation)
+              editor.setDictationTranscript(text);
+          }
+        );
         if (token !== generation || recording !== item) {
           session.cancel();
           return;
@@ -734,6 +795,7 @@ function dictate(pi: ExtensionAPI) {
       return;
     }
     transcribing = true;
+    finishingSession = session;
     try {
       if (item.bytes < 1000)
         throw new Error(item.stderr.trim() || "microphone produced no audio");
@@ -751,6 +813,8 @@ function dictate(pi: ExtensionAPI) {
       if (token === generation)
         notifyUser(`Dictation failed: ${errorText(error)}`, "error");
     } finally {
+      if (finishingSession === session)
+        finishingSession = undefined;
       transcribing = false;
       if (token === generation)
         editor.setDictationState("idle");
@@ -779,6 +843,8 @@ function dictate(pi: ExtensionAPI) {
     dictating = false;
     maxTimer.clear();
     startController?.abort();
+    finishingSession?.cancel();
+    finishingSession = undefined;
     const item = await take();
     stopChild(item?.child, "SIGKILL");
     item?.session?.cancel();
@@ -816,7 +882,7 @@ function dictate(pi: ExtensionAPI) {
     ctx = undefined;
   });
   pi.registerCommand("dictate", {
-    description: "Toggle hold-backtick dictation on/off",
+    description: "Choose dictation model; use /dictate on|off to toggle",
     handler: async (args, context) => {
       if (!SUPPORTED) {
         notify(context, "Dictation requires macOS", "warning");
@@ -827,21 +893,44 @@ function dictate(pi: ExtensionAPI) {
         notify(context, "Use /dictate or /dictate on|off", "warning");
         return;
       }
-      const nextEnabled = action === "on" ? true : action === "off" ? false : !enabled;
+      if (!action) {
+        if (context.mode !== "tui") {
+          notify(context, "Use /dictate on|off outside interactive mode", "warning");
+          return;
+        }
+        const selected = await selectCurrent(
+          context.ui,
+          `Choose dictation model (${enabled ? "on" : "off"}):`,
+          TRANSCRIPTION_MODELS,
+          model,
+          TRANSCRIPTION_MODEL_DESCRIPTIONS
+        );
+        if (!selected)
+          return;
+        model = selected;
+        try {
+          writeDictateState({ enabled, model });
+        } catch (error) {
+          notify(context, `Dictation model changed but state was not saved: ${errorText(error)}`, "warning");
+        }
+        notify(context, `Dictation model: ${model} (${enabled ? "on" : "off"})`, "info");
+        return;
+      }
+      const nextEnabled = action === "on";
       if (nextEnabled === enabled) {
         notify(context, enabled ? "Dictation already on" : "Dictation already off", "info");
         return;
       }
       enabled = nextEnabled;
       try {
-        writeDictateState({ enabled });
+        writeDictateState({ enabled, model });
       } catch (error) {
         notify(context, `Dictation changed but state was not saved: ${errorText(error)}`, "warning");
       }
       if (enabled) {
         currentEditor?.setDictationState("idle");
         warmUp();
-        notify(context, "Dictation on - hold ` to record", "info");
+        notify(context, `Dictation on (${model}) - hold \` to record`, "info");
         return;
       }
       await teardown();

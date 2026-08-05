@@ -4,7 +4,7 @@
 
 // extensions/lib/audio.ts
 import { spawn, execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 // assets/talk/talk-audio.swift
 var talk_audio_default = 'import AVFoundation\nimport Foundation\nimport os\n\nlet sampleRate = 24_000.0\n\nfunc warn(_ message: String) {\n    FileHandle.standardError.write(Data(("voice-audio: " + message + "\\n").utf8))\n}\n\nfinal class PlaybackRing {\n    private let capacity = Int(sampleRate) * 120\n    private var buffer: [Float]\n    private var head = 0\n    private var count = 0\n    private let lock: UnsafeMutablePointer<os_unfair_lock_s> = {\n        let pointer = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)\n        pointer.initialize(to: os_unfair_lock_s())\n        return pointer\n    }()\n\n    init() {\n        buffer = [Float](repeating: 0, count: capacity)\n    }\n\n    func push(_ source: UnsafePointer<Float>, _ frames: Int) {\n        guard frames > 0 else { return }\n        var source = source\n        var frames = frames\n        if frames > capacity {\n            source = source.advanced(by: frames - capacity)\n            frames = capacity\n        }\n        os_unfair_lock_lock(lock)\n        defer { os_unfair_lock_unlock(lock) }\n        if count + frames > capacity {\n            let drop = count + frames - capacity\n            head = (head + drop) % capacity\n            count -= drop\n        }\n        var tail = (head + count) % capacity\n        buffer.withUnsafeMutableBufferPointer { destination in\n            guard let base = destination.baseAddress else { return }\n            var left = frames\n            var from = source\n            while left > 0 {\n                let chunk = min(left, capacity - tail)\n                base.advanced(by: tail).update(from: from, count: chunk)\n                from = from.advanced(by: chunk)\n                tail = (tail + chunk) % capacity\n                left -= chunk\n            }\n        }\n        count += frames\n    }\n\n    func pop(into out: UnsafeMutablePointer<Float>, count wanted: Int) {\n        os_unfair_lock_lock(lock)\n        let available = min(wanted, count)\n        var index = head\n        buffer.withUnsafeMutableBufferPointer { source in\n            guard let base = source.baseAddress else { return }\n            var left = available\n            var to = out\n            while left > 0 {\n                let chunk = min(left, capacity - index)\n                to.update(from: base.advanced(by: index), count: chunk)\n                to = to.advanced(by: chunk)\n                index = (index + chunk) % capacity\n                left -= chunk\n            }\n        }\n        head = index\n        count -= available\n        os_unfair_lock_unlock(lock)\n        if available < wanted {\n            out.advanced(by: available).update(repeating: 0, count: wanted - available)\n        }\n    }\n\n    func clear() {\n        os_unfair_lock_lock(lock)\n        head = 0\n        count = 0\n        os_unfair_lock_unlock(lock)\n    }\n}\n\nfinal class StdoutWriter {\n    private var pending: [Data] = []\n    private let condition = NSCondition()\n    private let maxPending = 200\n\n    init() {\n        let thread = Thread { [self] in run() }\n        thread.name = "voice-audio.stdout"\n        thread.qualityOfService = .userInitiated\n        thread.start()\n    }\n\n    func write(_ data: Data) {\n        condition.lock()\n        if pending.count >= maxPending {\n            pending.removeFirst(pending.count - maxPending + 1)\n        }\n        pending.append(data)\n        condition.signal()\n        condition.unlock()\n    }\n\n    private func run() {\n        while true {\n            condition.lock()\n            while pending.isEmpty { condition.wait() }\n            let batch = pending\n            pending.removeAll(keepingCapacity: true)\n            condition.unlock()\n            for chunk in batch where !writeAll(chunk) {\n                exit(0)\n            }\n        }\n    }\n\n    private func writeAll(_ data: Data) -> Bool {\n        data.withUnsafeBytes { raw -> Bool in\n            guard var pointer = raw.baseAddress else { return true }\n            var left = raw.count\n            while left > 0 {\n                let written = Foundation.write(1, pointer, left)\n                if written > 0 {\n                    pointer = pointer.advanced(by: written)\n                    left -= written\n                    continue\n                }\n                if written < 0 && errno == EINTR { continue }\n                if written < 0 && errno == EAGAIN {\n                    usleep(1000)\n                    continue\n                }\n                return false\n            }\n            return true\n        }\n    }\n}\n\nfinal class VoiceEngine {\n    let ring = PlaybackRing()\n    private let engine = AVAudioEngine()\n    private let stdout = StdoutWriter()\n    private let ioFormat: AVAudioFormat\n    private let micFormat: AVAudioFormat\n    private var sourceNode: AVAudioSourceNode?\n    private var converter: AVAudioConverter?\n    private let configQueue = DispatchQueue(label: "voice-audio.config")\n    private var running = false\n    private var rebuildGeneration = 0\n\n    private(set) var echoCancelled = false\n\n    init?() {\n        guard let io = AVAudioFormat(\n            commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false\n        ), let mic = AVAudioFormat(\n            commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: true\n        ) else {\n            warn("could not create audio formats")\n            return nil\n        }\n        ioFormat = io\n        micFormat = mic\n    }\n\n    func start() throws {\n        do {\n            try engine.inputNode.setVoiceProcessingEnabled(true)\n            echoCancelled = true\n        } catch {\n            warn("voice processing unavailable, echo cancellation disabled: \\(error.localizedDescription)")\n        }\n        try configure()\n        try engine.start()\n        running = true\n\n        NotificationCenter.default.addObserver(\n            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil\n        ) { [weak self] _ in\n            self?.scheduleRebuild()\n        }\n    }\n\n    private func configure() throws {\n        let outputFormat = engine.outputNode.outputFormat(forBus: 0)\n        let inputRate = engine.inputNode.outputFormat(forBus: 0).sampleRate\n        guard inputRate > 0, outputFormat.sampleRate > 0 else {\n            throw NSError(\n                domain: "voice-audio", code: 1,\n                userInfo: [NSLocalizedDescriptionKey: "no usable audio device (input \\(inputRate) Hz)"],\n            )\n        }\n        guard let inputFormat = AVAudioFormat(\n            commonFormat: .pcmFormatFloat32, sampleRate: inputRate, channels: 1, interleaved: false\n        ), let converter = AVAudioConverter(from: inputFormat, to: micFormat) else {\n            throw NSError(\n                domain: "voice-audio", code: 2,\n                userInfo: [NSLocalizedDescriptionKey: "could not convert mic audio from \\(inputRate) Hz"],\n            )\n        }\n        self.converter = converter\n\n        if sourceNode == nil {\n            let ring = ring\n            let node = AVAudioSourceNode(format: ioFormat) { _, _, frameCount, audioBufferList -> OSStatus in\n                let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)\n                guard let data = buffers[0].mData else { return noErr }\n                ring.pop(into: data.assumingMemoryBound(to: Float.self), count: Int(frameCount))\n                return noErr\n            }\n            sourceNode = node\n            engine.attach(node)\n        }\n        guard let sourceNode else { return }\n        engine.connect(sourceNode, to: engine.mainMixerNode, format: ioFormat)\n        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)\n\n        engine.inputNode.removeTap(onBus: 0)\n        engine.inputNode.installTap(onBus: 0, bufferSize: 960, format: inputFormat) { [weak self] buffer, _ in\n            self?.emit(buffer)\n        }\n        warn("engine at \\(outputFormat.sampleRate) Hz/\\(outputFormat.channelCount) ch out, \\(inputRate) Hz in")\n    }\n\n    private func emit(_ buffer: AVAudioPCMBuffer) {\n        guard let converter, buffer.frameLength > 0 else { return }\n        let ratio = sampleRate / buffer.format.sampleRate\n        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16\n        guard let converted = AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: capacity) else { return }\n        var fed = false\n        var conversionError: NSError?\n        converter.convert(to: converted, error: &conversionError) { _, status in\n            if fed {\n                status.pointee = .noDataNow\n                return nil\n            }\n            fed = true\n            status.pointee = .haveData\n            return buffer\n        }\n        if let conversionError {\n            warn("mic conversion failed: \\(conversionError.localizedDescription)")\n            return\n        }\n        guard converted.frameLength > 0, let channel = converted.int16ChannelData else { return }\n        stdout.write(Data(bytes: channel[0], count: Int(converted.frameLength) * 2))\n    }\n\n    private func scheduleRebuild() {\n        configQueue.async { [self] in\n            rebuildGeneration += 1\n            let generation = rebuildGeneration\n            configQueue.asyncAfter(deadline: .now() + 0.2) { [self] in\n                guard generation == rebuildGeneration, running else { return }\n                rebuild()\n            }\n        }\n    }\n\n    private func rebuild() {\n        warn("audio route changed, rebuilding")\n        engine.stop()\n        do {\n            try configure()\n            try engine.start()\n        } catch {\n            warn("failed to rebuild audio engine: \\(error.localizedDescription)")\n        }\n    }\n}\n\nsignal(SIGPIPE, SIG_IGN)\n\nswitch AVCaptureDevice.authorizationStatus(for: .audio) {\ncase .authorized:\n    break\ncase .notDetermined:\n    let granted = DispatchSemaphore(value: 0)\n    var allowed = false\n    AVCaptureDevice.requestAccess(for: .audio) { ok in\n        allowed = ok\n        granted.signal()\n    }\n    if granted.wait(timeout: .now() + 30) == .timedOut || !allowed {\n        warn("microphone access was not granted")\n        exit(1)\n    }\ndefault:\n    warn("microphone access denied; enable it in System Settings > Privacy & Security > Microphone")\n    exit(1)\n}\n\nguard let voice = VoiceEngine() else { exit(1) }\n\nsignal(SIGUSR1, SIG_IGN)\nlet flushSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .global())\nflushSource.setEventHandler { voice.ring.clear() }\nflushSource.resume()\n\nDispatchQueue.global(qos: .userInitiated).async {\n    let input = FileHandle.standardInput\n    var pending = Data()\n    var floats: [Float] = []\n    while true {\n        let data = input.availableData\n        if data.isEmpty { exit(0) }\n        if pending.isEmpty { pending = data } else { pending.append(data) }\n        let usable = pending.count & ~1\n        if usable == 0 { continue }\n        let frames = usable / 2\n        if floats.count < frames { floats = [Float](repeating: 0, count: frames) }\n        pending.withUnsafeBytes { raw in\n            for index in 0..<frames {\n                floats[index] = Float(raw.loadUnaligned(fromByteOffset: index * 2, as: Int16.self)) / 32768.0\n            }\n        }\n        floats.withUnsafeBufferPointer { buffer in\n            guard let base = buffer.baseAddress else { return }\n            voice.ring.push(base, frames)\n        }\n        pending = usable < pending.count ? pending.subdata(in: usable..<pending.count) : Data()\n    }\n}\n\ndo {\n    try voice.start()\n} catch {\n    warn("audio engine failed to start: \\(error.localizedDescription)")\n    exit(1)\n}\n\nwarn("ready aec=\\(voice.echoCancelled ? 1 : 0)")\ndispatchMain()\n';
@@ -52,6 +52,36 @@ var MIC_STALL_MS = 4e3;
 var TALK_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "pi", "talk");
 var AEC_SOURCE = join(TALK_DIR, "talk-audio.swift");
 var AEC_BINARY = join(TALK_DIR, "talk-audio");
+var TALK_STATE = join(TALK_DIR, "state.json");
+function readTalkState() {
+  try {
+    const value = JSON.parse(readFileSync(TALK_STATE, "utf8"));
+    if (!isRecord(value)) return {};
+    return {
+      model: typeof value.model === "string" && REALTIME_MODELS.includes(value.model) ? value.model : void 0,
+      transcribeModel: typeof value.transcribeModel === "string" && TRANSCRIBE_MODELS.includes(value.transcribeModel) ? value.transcribeModel : void 0,
+      reasoningEffort: typeof value.reasoningEffort === "string" && REASONING_EFFORTS.includes(value.reasoningEffort) ? value.reasoningEffort : void 0,
+      voice: typeof value.voice === "string" && VOICES.includes(value.voice) ? value.voice : void 0
+    };
+  } catch {
+    return {};
+  }
+}
+function writeTalkState(model, transcribeModel, reasoningEffort, voice) {
+  mkdirSync(TALK_DIR, { recursive: true });
+  const temporary = `${TALK_STATE}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify({ model, transcribeModel, reasoningEffort, voice }, null, 2)}
+`, { mode: 0o600 });
+    renameSync(temporary, TALK_STATE);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+    }
+    throw error;
+  }
+}
 function pcmChunkMs(buf) {
   return buf.length / 2 / SAMPLE_RATE * 1e3;
 }
@@ -1673,9 +1703,46 @@ Reason: the user ended the talk session.`;
 
 // extensions/talk/index.ts
 var REALTIME_URL = "wss://api.openai.com/v1/realtime";
-var MODEL = "gpt-realtime-2.1";
-var VOICE = "marin";
-var TRANSCRIBE_MODEL = "gpt-live-transcribe";
+var REALTIME_MODELS = [
+  "gpt-realtime-2.1-mini",
+  "gpt-realtime-2.1"
+];
+var REALTIME_MODEL_DESCRIPTIONS = {
+  "gpt-realtime-2.1-mini": "Fast, low-cost voice and tools",
+  "gpt-realtime-2.1": "Complex tools, alphanumerics, noise handling"
+};
+var DEFAULT_MODEL = REALTIME_MODELS[0];
+var REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"];
+var REASONING_EFFORT_DESCRIPTIONS = {
+  minimal: "Lowest latency, simple requests",
+  low: "Responsive everyday work",
+  medium: "Multi-step debugging",
+  high: "Complex constraints and planning",
+  xhigh: "Maximum depth, highest latency"
+};
+var DEFAULT_REASONING_EFFORT = "low";
+var VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"];
+var DEFAULT_VOICE = VOICES[0];
+var TRANSCRIBE_MODELS = [
+  "gpt-live-transcribe",
+  "gpt-transcribe"
+];
+var TRANSCRIBE_MODEL_DESCRIPTIONS = {
+  "gpt-live-transcribe": "Live deltas, low latency, coding hints",
+  "gpt-transcribe": "Accuracy-focused, committed turns"
+};
+var DEFAULT_TRANSCRIBE_MODEL = TRANSCRIBE_MODELS[0];
+var TRANSCRIBE_PROMPT = "A software-development conversation. Preserve code identifiers, command names, technical product names, and spell this coding agent's name as Pi.";
+var TRANSCRIBE_KEYWORDS = ["Pi", "TypeScript", "JavaScript", "Python", "Git", "GitHub", "tmux"];
+async function selectCurrent2(ui, title, options, current, descriptions = {}) {
+  const labels = options.map((option) => {
+    const description = descriptions[option];
+    return `${option === current ? "\u2713 " : "  "}${option}${description ? ` \u2014 ${description}` : ""}`;
+  });
+  const selected = await ui.select(title, labels);
+  if (!selected) return;
+  return options[labels.indexOf(selected)];
+}
 var PLAYBACK_TAIL_MS = 250;
 var RESPONSE_TIMEOUT_MS = 6e4;
 var LANGUAGE = process.env.PI_TALK_LANGUAGE?.trim();
@@ -1696,15 +1763,21 @@ function pcmRms(buf) {
   return Math.sqrt(sum / count);
 }
 var TalkSession = class {
-  constructor(pi, ctx, model, onClosed) {
+  constructor(pi, ctx, model, transcribeModel, reasoningEffort, voice, onClosed) {
     this.pi = pi;
     this.ctx = ctx;
     this.model = model;
+    this.transcribeModel = transcribeModel;
+    this.reasoningEffort = reasoningEffort;
+    this.voice = voice;
     this.onClosed = onClosed;
   }
   pi;
   ctx;
   model;
+  transcribeModel;
+  reasoningEffort;
+  voice;
   onClosed;
   session;
   audio;
@@ -1756,6 +1829,20 @@ var TalkSession = class {
     const instructions = startupContext ? `${prompt}
 
 ${startupContext}` : prompt;
+    const transcription = this.transcribeModel === "gpt-live-transcribe"
+      ? {
+          model: this.transcribeModel,
+          prompt: TRANSCRIBE_PROMPT,
+          ...LANGUAGE ? { languages: [LANGUAGE] } : {},
+          keywords: TRANSCRIBE_KEYWORDS,
+          delay: "low"
+        }
+      : {
+          model: this.transcribeModel,
+          prompt: TRANSCRIBE_PROMPT,
+          ...LANGUAGE ? { languages: [LANGUAGE] } : {},
+          keywords: TRANSCRIBE_KEYWORDS
+        };
     this.session = await openRealtimeSession({
       url: `${REALTIME_URL}?model=${encodeURIComponent(this.model)}`,
       feature: "talk",
@@ -1769,11 +1856,12 @@ ${startupContext}` : prompt;
           instructions,
           tools: REALTIME_TOOLS,
           tool_choice: "auto",
+          ...this.model.startsWith("gpt-realtime-2") ? { reasoning: { effort: this.reasoningEffort } } : {},
           audio: {
             input: {
               format: { type: "audio/pcm", rate: SAMPLE_RATE },
               noise_reduction: { type: "near_field" },
-              transcription: { model: TRANSCRIBE_MODEL, ...LANGUAGE ? { language: LANGUAGE } : {} },
+              transcription,
               turn_detection: {
                 type: "server_vad",
                 interrupt_response: true,
@@ -1784,7 +1872,7 @@ ${startupContext}` : prompt;
             },
             output: {
               format: { type: "audio/pcm", rate: SAMPLE_RATE },
-              voice: VOICE
+              voice: this.voice
             }
           }
         }
@@ -1811,7 +1899,8 @@ ${startupContext}` : prompt;
       { triggerTurn: false }
     );
     if (this.ctx.hasUI) {
-      const tag = `${this.model.replace(/^gpt-realtime-/, "")} \xB7 ${VOICE}`;
+      const reasoning = this.model.startsWith("gpt-realtime-2") ? ` \xB7 ${this.reasoningEffort}` : "";
+      const tag = `${this.model.replace(/^gpt-realtime-/, "")}${reasoning} \xB7 ${this.voice}`;
       this.ctx.ui.setStatus("talk", `\u25C9 talk \xB7 ${tag}`);
     }
     this.dispatch({ kind: "connected" });
@@ -1994,6 +2083,11 @@ ${startupContext}` : prompt;
 };
 function talk(pi) {
   let active;
+  const saved = readTalkState();
+  let selectedModel = saved.model ?? DEFAULT_MODEL;
+  let selectedTranscribeModel = saved.transcribeModel ?? DEFAULT_TRANSCRIBE_MODEL;
+  let selectedReasoningEffort = saved.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+  let selectedVoice = saved.voice ?? DEFAULT_VOICE;
   pi.on("message_end", (event) => active?.onAgentMessage(event.message));
   pi.on("agent_settled", () => active?.onAgentEnd());
   pi.on("input", (event) => {
@@ -2026,10 +2120,63 @@ function talk(pi) {
         notify(ctx, "Talk is already on", "info");
         return;
       }
-      const session = new TalkSession(pi, ctx, MODEL, () => {
-        if (active === session) active = void 0;
-        session.clearWidget();
-      });
+      if (!action) {
+        if (!ctx.hasUI) {
+          notify(ctx, "Use /talk on outside interactive mode", "warning");
+          return;
+        }
+        const nextModel = await selectCurrent2(
+          ctx.ui,
+          "Choose Talk model:",
+          REALTIME_MODELS,
+          selectedModel,
+          REALTIME_MODEL_DESCRIPTIONS
+        );
+        if (!nextModel) return;
+        let nextReasoningEffort = selectedReasoningEffort;
+        if (nextModel.startsWith("gpt-realtime-2")) {
+          const effort = await selectCurrent2(
+            ctx.ui,
+            "Choose reasoning effort:",
+            REASONING_EFFORTS,
+            selectedReasoningEffort,
+            REASONING_EFFORT_DESCRIPTIONS
+          );
+          if (!effort) return;
+          nextReasoningEffort = effort;
+        }
+        const nextVoice = await selectCurrent2(ctx.ui, "Choose voice:", VOICES, selectedVoice);
+        if (!nextVoice) return;
+        const nextTranscribeModel = await selectCurrent2(
+          ctx.ui,
+          "Choose transcription model:",
+          TRANSCRIBE_MODELS,
+          selectedTranscribeModel,
+          TRANSCRIBE_MODEL_DESCRIPTIONS
+        );
+        if (!nextTranscribeModel) return;
+        selectedModel = nextModel;
+        selectedReasoningEffort = nextReasoningEffort;
+        selectedVoice = nextVoice;
+        selectedTranscribeModel = nextTranscribeModel;
+        try {
+          writeTalkState(selectedModel, selectedTranscribeModel, selectedReasoningEffort, selectedVoice);
+        } catch (error) {
+          notify(ctx, `Talk selection changed but state was not saved: ${errorText(error)}`, "warning");
+        }
+      }
+      const session = new TalkSession(
+        pi,
+        ctx,
+        selectedModel,
+        selectedTranscribeModel,
+        selectedReasoningEffort,
+        selectedVoice,
+        () => {
+          if (active === session) active = void 0;
+          session.clearWidget();
+        }
+      );
       try {
         active = session;
         if (ctx.hasUI) ctx.ui.setStatus("talk", "\u25C9 talk");
