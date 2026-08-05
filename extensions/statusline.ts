@@ -255,9 +255,7 @@ export default function statusline(pi: ExtensionAPI): void {
 					const model = activeModel ?? ctx.model;
 					const project = [color.project(shortenPath(ctx.cwd))];
 					const branch = footerData.getGitBranch();
-					const session = pi.getSessionName();
 					if (branch) project.push(color.branch(branch));
-					if (session) project.push(color.session(session));
 					let modelText = color.model(model?.id || "no-model");
 					if (model?.reasoning) modelText += color.model(` (${pi.getThinkingLevel()})`);
 					if (fastActive) modelText += separator() + color.session("fast");
@@ -308,7 +306,6 @@ export default function statusline(pi: ExtensionAPI): void {
 		}
 		requestRender?.();
 	});
-	pi.on("session_info_changed", () => requestRender?.());
 	pi.on("thinking_level_select", () => requestRender?.());
 	pi.on("message_end", () => requestRender?.());
 	pi.on("session_compact", () => requestRender?.());
