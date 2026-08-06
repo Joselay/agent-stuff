@@ -20,7 +20,7 @@ import {
 	type Theme,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 function formatTokensCompact(count: number): string {
 	if (count < 1000) return count.toString();
@@ -44,7 +44,7 @@ function formatTokensCompact(count: number): string {
  * | skills markup   | `formatSkillsForPrompt` (exported), sliced from real prompt  |
  * | context files   | `<project_context>` as `buildSystemPrompt` writes it         |
  * | tool schemas    | JSON of `{name,description,parameters}` — pi-ai wire `Tool`  |
- * | messages        | `estimateTokens` per context message, or remainder of total  |
+ * | messages        | `estimateTokens` per current context message                 |
  * | compact trigger | `shouldCompact` + `SettingsManager.getCompactionSettings()`  |
  */
 
@@ -89,8 +89,10 @@ type ContextBreakdown = {
 	contextWindow: number;
 	used: number;
 	free: number;
-	measured: boolean;
-	willCompact: boolean;
+	measurement?: "provider-anchored" | "estimated";
+	/** Legacy snapshots written before measurement was made explicit. */
+	measured?: boolean;
+	willCompact: boolean | null;
 	unattributed: SegmentId[];
 	segments: Segment[];
 };
@@ -103,21 +105,17 @@ type ContextInput = {
 	/** `ctx.getSystemPromptOptions()` — base inputs behind that prompt. */
 	promptOptions: Pick<
 		BuildSystemPromptOptions,
-		"appendSystemPrompt" | "contextFiles" | "skills" | "customPrompt"
+		"appendSystemPrompt" | "contextFiles" | "skills" | "customPrompt" | "selectedTools" | "cwd"
 	>;
 	/** Host `formatSkillsForPrompt`. */
 	formatSkills: (skills: Skill[]) => string;
 	tools: readonly ToolInfo[];
 	activeTools: readonly string[];
-	/**
-	 * Message-side estimate from the host when no provider total exists
-	 * (`getContextUsage().tokens` while still unmeasured, else sum of
-	 * `estimateTokens` over `buildContextEntries` messages).
-	 */
+	/** Message-side estimate from pi's current context entries. */
 	messageTokens: number;
 	/**
-	 * Provider-backed total from `getContextUsage().tokens` once an assistant
-	 * has answered (system + tools + messages + trailing). null otherwise.
+	 * Provider-anchored total from `getContextUsage().tokens` once an assistant
+	 * has answered (including pi's estimate for trailing messages). null otherwise.
 	 */
 	reportedTokens: number | null;
 	compaction: Required<CompactionSettings>;
@@ -138,12 +136,6 @@ function contextFilesSection(files: readonly { path: string; content: string }[]
 		`</project_context>\n`
 	);
 }
-
-/** Skills fence markers from `formatSkillsForPrompt`. */
-const SKILLS_SECTION_RE =
-	/\n\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*?<\/available_skills>/;
-
-const CONTEXT_FILES_SECTION_RE = /\n\n<project_context>\n\n[\s\S]*?<\/project_context>\n/;
 
 /**
  * Preamble length of `formatSkills`, measured not copied:
@@ -230,14 +222,14 @@ function splitToolSegments(activeTools: readonly ToolInfo[]): { builtin: Segment
 	return {
 		builtin: {
 			id: "builtinTools",
-			label: "Built-in tools",
+			label: "Built-in schemas",
 			tokens: builtinTokens,
 			note: builtinTools.length === 1 ? "1 tool" : `${builtinTools.length} tools`,
 			items: builtinItems,
 		},
 		extension: {
 			id: "extensionTools",
-			label: "Extension tools",
+			label: "Custom schemas",
 			tokens: extensionTokens,
 			note: extensionTools.length === 1 ? "1 tool" : `${extensionTools.length} tools`,
 			items: extensionItems,
@@ -245,55 +237,42 @@ function splitToolSegments(activeTools: readonly ToolInfo[]): { builtin: Segment
 	};
 }
 
-function findSection(
-	prompt: string,
-	exact: string,
-	fallbackRe: RegExp | undefined,
-): { text: string; found: boolean } {
-	if (exact.length > 0 && prompt.includes(exact)) {
-		return { text: exact, found: true };
-	}
-	if (fallbackRe) {
-		const match = prompt.match(fallbackRe);
-		if (match?.[0]) return { text: match[0], found: true };
-	}
-	return { text: "", found: exact.length === 0 };
-}
-
 function buildBreakdown(input: ContextInput): ContextBreakdown {
 	const { systemPrompt, promptOptions, formatSkills } = input;
 	const unattributed: SegmentId[] = [];
 
+	// buildSystemPrompt appends these sections in this order:
+	// append → context files → skills → cwd. Peel exact suffixes in reverse.
+	// Broad regex/first-match removal can misattribute identical user text.
+	const cwdSuffix = `\nCurrent working directory: ${promptOptions.cwd.replace(/\\/g, "/")}`;
 	let base = systemPrompt;
-	const take = (id: SegmentId, section: string, expected: boolean): string => {
-		if (section.length === 0) {
-			if (expected) unattributed.push(id);
-			return "";
-		}
-		if (!base.includes(section)) {
+	let cwdText = "";
+	if (base.endsWith(cwdSuffix)) {
+		base = base.slice(0, -cwdSuffix.length);
+		cwdText = cwdSuffix;
+	} else {
+		unattributed.push("system");
+	}
+
+	const takeSuffix = (id: SegmentId, section: string, expected: boolean): string => {
+		if (!expected) return "";
+		if (!section || !base.endsWith(section)) {
 			unattributed.push(id);
 			return "";
 		}
-		base = base.replace(section, "");
+		base = base.slice(0, -section.length);
 		return section;
 	};
 
-	// `buildSystemPrompt`: append when truthy, no trim.
-	const appendExact = promptOptions.appendSystemPrompt ? `\n\n${promptOptions.appendSystemPrompt}` : "";
-	const appendText = take("append", appendExact, false);
-
 	const files = promptOptions.contextFiles ?? [];
-	const filesFound = findSection(
-		base,
-		contextFilesSection(files),
-		files.length > 0 ? CONTEXT_FILES_SECTION_RE : undefined,
-	);
-	const filesText = take("contextFiles", filesFound.text, files.length > 0 && !filesFound.found);
-
 	const skills = (promptOptions.skills ?? []).filter((skill) => formatSkills([skill]).length > 0);
 	const skillsExact = formatSkills([...skills]);
-	const skillsFound = findSection(base, skillsExact, skills.length > 0 ? SKILLS_SECTION_RE : undefined);
-	const skillsText = take("skills", skillsFound.text, skills.length > 0 && !skillsFound.found);
+	const skillsExpected = skills.length > 0 && (promptOptions.selectedTools?.includes("read") ?? true);
+	const skillsText = takeSuffix("skills", skillsExact, skillsExpected);
+	const filesText = takeSuffix("contextFiles", contextFilesSection(files), files.length > 0);
+	const appendExact = promptOptions.appendSystemPrompt ? `\n\n${promptOptions.appendSystemPrompt}` : "";
+	const appendText = takeSuffix("append", appendExact, Boolean(promptOptions.appendSystemPrompt));
+	base += cwdText;
 	const skillsHeader = skillsText.length > 0 ? skillsHeaderChars(skills, formatSkills) : 0;
 
 	const active = new Set(input.activeTools);
@@ -351,35 +330,39 @@ function buildBreakdown(input: ContextInput): ContextBreakdown {
 		extension,
 	];
 
-	/**
-	 * Non-message prefix the way pi-ai estimates a full `Context` when no usage
-	 * exists: whole system prompt + whole tools array — not the sum of rounded
-	 * parts (which can drift a token per slice).
-	 */
-	const promptTokens = tokensOf(systemPrompt);
-	const toolsTokens = estimateToolsTokens(activeTools);
-	const prefixTokens = promptTokens + toolsTokens;
+	segments.push({ id: "messages", label: "Messages", tokens: input.messageTokens, items: [] });
 
-	const measured = input.reportedTokens !== null;
-	const reported = input.reportedTokens ?? 0;
-	// Provider usage is authoritative. Pi's chars/4 prefix estimate is
-	// conservative and can exceed a provider's measured total (especially for
-	// repetitive text). In that case, fit the attributed prefix into the
-	// measured total rather than rendering parts that sum past the headline.
-	const attributedPrefixTokens = measured ? Math.min(prefixTokens, reported) : prefixTokens;
-	if (attributedPrefixTokens < prefixTokens) {
+	const estimatedUsed = segments.reduce((sum, segment) => sum + segment.tokens, 0);
+	const measurement = input.reportedTokens === null ? "estimated" : "provider-anchored";
+	const used = input.reportedTokens ?? estimatedUsed;
+
+	// Provider usage gives an authoritative whole-context total, not a
+	// per-section split. Normalize every estimated used bucket—including
+	// messages—to that total. Assigning messages only the remainder can falsely
+	// report zero messages when the chars/4 prompt estimate exceeds provider
+	// tokenization.
+	if (measurement === "provider-anchored") {
 		const fitted = allocateCells(
 			segments.map((segment) => segment.tokens),
-			attributedPrefixTokens,
+			used,
 		);
 		segments.forEach((segment, index) => {
 			segment.tokens = fitted[index]!;
 		});
 	}
-	const messageTokens = measured ? reported - attributedPrefixTokens : input.messageTokens;
-	const used = measured ? reported : prefixTokens + input.messageTokens;
 
-	segments.push({ id: "messages", label: "Messages", tokens: messageTokens, items: [] });
+	// Keep detail rows consistent with their normalized parent bucket. Wrapper
+	// and list-header overhead is distributed proportionally across the items.
+	for (const segment of segments) {
+		if (segment.items.length === 0) continue;
+		const fitted = allocateCells(
+			segment.items.map((item) => item.tokens),
+			segment.tokens,
+		);
+		segment.items.forEach((item, index) => {
+			item.tokens = fitted[index]!;
+		});
+	}
 
 	const { compaction } = input;
 	const reserved = compaction.enabled
@@ -391,15 +374,19 @@ function buildBreakdown(input: ContextInput): ContextBreakdown {
 	// immediately following current usage. Keep it last so the grid reads:
 	// used → usable free space → autocompact threshold.
 	if (reserved > 0) {
-		segments.push({ id: "reserved", label: "Autocompact buffer", tokens: reserved, items: [] });
+		segments.push({ id: "reserved", label: "Autocompact reserve", tokens: reserved, items: [] });
 	}
 
 	return {
 		contextWindow: input.contextWindow,
 		used,
 		free,
-		measured,
-		willCompact: shouldCompact(used, input.contextWindow, compaction),
+		measurement,
+		// Pi deliberately treats post-compaction usage as unknown until a new
+		// provider response. Do not claim a threshold decision from our estimate.
+		willCompact: measurement === "provider-anchored"
+			? shouldCompact(used, input.contextWindow, compaction)
+			: null,
 		unattributed,
 		segments: segments.filter(
 			(segment) => segment.tokens > 0 || segment.id === "messages" || segment.id === "free",
@@ -488,11 +475,8 @@ function glyphFor(segment: Pick<Segment, "id" | "tokens">, used: number): string
 }
 
 /**
- * Fixed truecolor palette — not theme tokens.
- *
- * Theme roles collide (nightowl: `warning` and `syntaxType` are both yellow, so
- * context files and extension tools looked identical). Each segment needs a hue
- * you can spot in the grid without reading the legend.
+ * Fixed truecolor palette. Each segment needs a distinct hue in the grid;
+ * several theme roles intentionally share colors in some themes.
  */
 type Paint = (text: string) => string;
 
@@ -507,15 +491,15 @@ function hexColor(hex: string): Paint {
 }
 
 const SEGMENT_PAINT: Record<SegmentId, Paint> = {
-	system: hexColor("#22d3ee"), // cyan
-	append: hexColor("#ff79c6"), // pink
-	contextFiles: hexColor("#ffb86c"), // amber
-	skills: hexColor("#c792ea"), // purple
-	builtinTools: hexColor("#82aaff"), // blue
-	extensionTools: hexColor("#ff5370"), // rose
-	messages: hexColor("#22da6e"), // green
-	reserved: hexColor("#6272a4"), // slate
-	free: hexColor("#4b5263"), // charcoal
+	system: hexColor("#22d3ee"),
+	append: hexColor("#ff79c6"),
+	contextFiles: hexColor("#ffb86c"),
+	skills: hexColor("#c792ea"),
+	builtinTools: hexColor("#82aaff"),
+	extensionTools: hexColor("#ff5370"),
+	messages: hexColor("#22da6e"),
+	reserved: hexColor("#6272a4"),
+	free: hexColor("#4b5263"),
 };
 
 function paintSegment(id: SegmentId, text: string): string {
@@ -527,6 +511,18 @@ function percentOf(tokens: number, window: number): string {
 	const percent = (tokens / window) * 100;
 	if (percent > 0 && percent < 0.1) return "<0.1%";
 	return `${percent.toFixed(1)}%`;
+}
+
+function measurementOf(breakdown: ContextBreakdown): "provider-anchored" | "estimated" {
+	return breakdown.measurement ?? (breakdown.measured === false ? "estimated" : "provider-anchored");
+}
+
+function padEndVisible(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
+
+function padStartVisible(text: string, width: number): string {
+	return " ".repeat(Math.max(0, width - visibleWidth(text))) + text;
 }
 
 /**
@@ -573,9 +569,9 @@ function gridCells(breakdown: ContextBreakdown): SegmentId[] {
 
 function legendRow(segment: Segment, breakdown: ContextBreakdown, theme: Theme, labelWidth: number): string {
 	const swatch = paintSegment(segment.id, glyphFor(segment, breakdown.used));
-	const label = theme.fg("text", `${segment.label}:`.padEnd(labelWidth));
-	const tokens = theme.fg("text", `${formatTokensCompact(segment.tokens)} tokens`.padStart(14));
-	const percent = theme.fg("muted", `(${percentOf(segment.tokens, breakdown.contextWindow)})`.padStart(9));
+	const label = theme.fg("text", padEndVisible(`${segment.label}:`, labelWidth));
+	const tokens = theme.fg("text", padStartVisible(`${formatTokensCompact(segment.tokens)} tokens`, 14));
+	const percent = theme.fg("muted", padStartVisible(`(${percentOf(segment.tokens, breakdown.contextWindow)})`, 9));
 	const note = segment.note ? theme.fg("dim", `  ${segment.note}`) : "";
 	return `${swatch} ${label}${tokens}${percent}${note}`;
 }
@@ -587,16 +583,32 @@ type RenderOptions = {
 
 function renderContext(breakdown: ContextBreakdown, theme: Theme, options: RenderOptions): string[] {
 	const lines: string[] = [];
-	const used = `${formatTokensCompact(breakdown.used)}/${formatTokensCompact(breakdown.contextWindow)} tokens`;
+	const measurement = measurementOf(breakdown);
+	const approximate = measurement === "estimated" ? "~" : "";
+	const used = `${approximate}${formatTokensCompact(breakdown.used)}/${formatTokensCompact(breakdown.contextWindow)} tokens`;
 	lines.push(
 		`${theme.fg("accent", theme.bold("Context"))} ${theme.fg("dim", "·")} ${theme.fg("text", options.model)} ${theme.fg("dim", "·")} ${theme.fg("text", used)} ${theme.fg("muted", `(${percentOf(breakdown.used, breakdown.contextWindow)})`)}`,
-		"",
+		theme.fg(
+			"dim",
+			measurement === "provider-anchored"
+				? "Provider-anchored total; section split estimated"
+				: "Estimated with pi's token estimator; no current provider total",
+		),
 	);
+	if (breakdown.unattributed.length > 0) {
+		lines.push(
+			theme.fg(
+				"warning",
+				`Could not safely isolate: ${[...new Set(breakdown.unattributed)].join(", ")}; counted in system prompt`,
+			),
+		);
+	}
+	lines.push("");
 
 	const cells = gridCells(breakdown);
 	const byId = new Map(breakdown.segments.map((segment) => [segment.id, segment]));
 	// +1 for trailing ":", +1 breathing room before the token column.
-	const labelWidth = Math.max(...breakdown.segments.map((segment) => segment.label.length)) + 2;
+	const labelWidth = Math.max(...breakdown.segments.map((segment) => visibleWidth(segment.label))) + 2;
 	for (let row = 0; row < GRID_ROWS; row++) {
 		const painted = cells
 			.slice(row * GRID_COLUMNS, (row + 1) * GRID_COLUMNS)
@@ -619,7 +631,7 @@ function renderContext(breakdown: ContextBreakdown, theme: Theme, options: Rende
 	// size line up their numbers and can be compared by eye.
 	const itemWidth = Math.max(
 		// +1 for trailing ":" on each item label.
-		...listed.flatMap((segment) => segment.items.map((item) => item.label.length + 1)),
+		...listed.flatMap((segment) => segment.items.map((item) => visibleWidth(item.label) + 1)),
 		0,
 	);
 	for (const segment of listed) {
@@ -627,8 +639,8 @@ function renderContext(breakdown: ContextBreakdown, theme: Theme, options: Rende
 		segment.items.forEach((item, index) => {
 			const last = index === segment.items.length - 1;
 			const branch = theme.fg("dim", `${last ? TREE_END : TREE_BRANCH} `);
-			const label = theme.fg("text", `${item.label}:`.padEnd(itemWidth));
-			const tokens = theme.fg("muted", `${formatTokensCompact(item.tokens)} tokens`.padStart(15));
+			const label = theme.fg("text", padEndVisible(`${item.label}:`, itemWidth));
+			const tokens = theme.fg("muted", padStartVisible(`${formatTokensCompact(item.tokens)} tokens`, 15));
 			const scope = item.scope ? theme.fg("dim", `  ${item.scope}`) : "";
 			lines.push(`${INDENT}  ${branch}${label}${tokens}${scope}`);
 		});
@@ -650,7 +662,7 @@ function renderContext(breakdown: ContextBreakdown, theme: Theme, options: Rende
  * - `formatSkillsForPrompt`
  * - `pi.getAllTools()` / `pi.getActiveTools()`
  * - `sessionManager.buildContextEntries` + `sessionEntryToContextMessages` + `estimateTokens`
- * - `getLastAssistantUsage` — distinguishes measured total vs messages-only estimate
+ * - `getLastAssistantUsage` — distinguishes provider-anchored vs estimated total
  * - `SettingsManager.getCompactionSettings` + `shouldCompact`
  */
 
@@ -680,13 +692,16 @@ function estimateMessageTokens(ctx: ExtensionCommandContext): number {
 	return ctx.sessionManager
 		.buildContextEntries()
 		.flatMap((entry) => sessionEntryToContextMessages(entry))
+		// `!!` bash entries stay in the session transcript but Pi's
+		// convertToLlm() removes them from provider context.
+		.filter((message) => message.role !== "bashExecution" || !message.excludeFromContext)
 		.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
 /**
  * Split host `getContextUsage()` into:
- * - `reported` — provider-backed full-request total (null if not yet measured)
- * - `messages` — messages-only estimate for the unmeasured case
+ * - `reported` — provider-anchored full-request total (null if not yet measured)
+ * - `messages` — pi-estimated current message share used for attribution
  *
  * `getContextUsage` already runs pi's `estimateContextTokens` on session
  * messages (last assistant usage + trailing `estimateTokens`). Before any
@@ -697,18 +712,27 @@ function estimateMessageTokens(ctx: ExtensionCommandContext): number {
 function usageParts(ctx: ExtensionCommandContext): { reported: number | null; messages: number } {
 	const usage = ctx.getContextUsage();
 	const entries = ctx.sessionManager.buildContextEntries();
-	const hasAssistantUsage = getLastAssistantUsage(entries) !== undefined;
+	const lastAssistantUsage = getLastAssistantUsage(entries);
+	const messages = estimateMessageTokens(ctx);
 
-	if (hasAssistantUsage && usage?.tokens != null) {
-		return { reported: usage.tokens, messages: 0 };
+	if (lastAssistantUsage && usage?.tokens != null) {
+		const contextMessages = entries.flatMap((entry) => sessionEntryToContextMessages(entry));
+		const usageIndex = contextMessages.findLastIndex(
+			(message) => message.role === "assistant" && message.usage === lastAssistantUsage,
+		);
+		// Pi 0.83's getContextUsage() estimates every trailing runtime message,
+		// including `!!` bash entries that convertToLlm() excludes. Correct only
+		// those trailing additions; excluded entries before the provider usage
+		// were already absent from the provider's measured request.
+		const excludedTrailing = usageIndex < 0
+			? 0
+			: contextMessages
+					.slice(usageIndex + 1)
+					.filter((message) => message.role === "bashExecution" && message.excludeFromContext)
+					.reduce((sum, message) => sum + estimateTokens(message), 0);
+		return { reported: Math.max(0, usage.tokens - excludedTrailing), messages };
 	}
-
-	// Unmeasured: prefer the host's messages estimate when it has one.
-	if (usage?.tokens != null) {
-		return { reported: null, messages: usage.tokens };
-	}
-
-	return { reported: null, messages: estimateMessageTokens(ctx) };
+	return { reported: null, messages };
 }
 
 function modelLabel(ctx: ExtensionCommandContext): string {
@@ -721,15 +745,18 @@ function snapshot(pi: ExtensionAPI, ctx: ExtensionCommandContext): ContextBreakd
 	if (contextWindow <= 0) return undefined;
 
 	const { reported, messages } = usageParts(ctx);
+	const promptOptions = ctx.getSystemPromptOptions();
 
 	return buildBreakdown({
 		contextWindow,
 		cwd: ctx.cwd,
 		systemPrompt: ctx.getSystemPrompt(),
-		promptOptions: ctx.getSystemPromptOptions(),
+		promptOptions,
 		formatSkills: formatSkillsForPrompt,
 		tools: pi.getAllTools(),
-		activeTools: pi.getActiveTools(),
+		// Canonical prompt snapshot. This avoids racing a dynamic active-tool
+		// update between reading the system prompt and querying pi again.
+		activeTools: promptOptions.selectedTools ?? pi.getActiveTools(),
 		messageTokens: messages,
 		reportedTokens: reported,
 		compaction: compactionSettings(ctx),
@@ -740,8 +767,13 @@ export default function context(pi: ExtensionAPI) {
 	pi.registerEntryRenderer<ContextEntryData>(ENTRY_TYPE, (entry, _options, theme) => {
 		const data = entry.data;
 		if (!data?.breakdown) return undefined;
-		const lines = renderContext(data.breakdown, theme, { model: data.model });
-		return new Text(lines.join("\n"), 0, 0);
+		return {
+			invalidate() {},
+			render(width: number): string[] {
+				return renderContext(data.breakdown, theme, { model: data.model })
+					.map((line) => truncateToWidth(line, width, theme.fg("dim", "...")));
+			},
+		};
 	});
 
 	pi.registerCommand("context", {
