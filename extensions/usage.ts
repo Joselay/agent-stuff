@@ -9,8 +9,8 @@ import type {
 	ExtensionContext,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
-import { type Component, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Box, type Component, Container, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -498,9 +498,25 @@ export default function usage(pi: ExtensionAPI) {
 					continue;
 				}
 
-				const action = await ctx.ui.custom<"refresh" | "close">((_tui, theme, _keybindings, done) =>
-					new UsageComponent(usage, theme, done),
-				);
+				const action = await ctx.ui.custom<"refresh" | "close">((tui, theme, _keybindings, done) => {
+					const usageComponent = new UsageComponent(usage, theme, done);
+					const content = new Box(2, 1);
+					content.addChild(usageComponent);
+
+					const container = new Container();
+					container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+					container.addChild(content);
+					container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+
+					return {
+						render: (width: number) => container.render(width),
+						invalidate: () => container.invalidate(),
+						handleInput: (data: string) => {
+							usageComponent.handleInput(data);
+							tui.requestRender();
+						},
+					};
+				});
 				if (action !== "refresh") return;
 			}
 		},
