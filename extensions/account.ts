@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, DynamicBorder, getAgentDir, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { Box, Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 const PROVIDER = "openai-codex";
 const AUTH_PATH = join(getAgentDir(), "auth.json");
@@ -242,20 +242,26 @@ export default function accountExtension(pi: ExtensionAPI): void {
 			});
 			const container = new Container();
 			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			const title = new Text("", 1, 0);
-			container.addChild(title);
+			const header = new Text("", 2, 1);
+			container.addChild(header);
 			const list = new SelectList(items, Math.min(items.length, 10), {
 				selectedPrefix: (text) => theme.fg("accent", text), selectedText: (text) => theme.fg("accent", text),
 				description: (text) => theme.fg("muted", text), scrollInfo: (text) => theme.fg("dim", text), noMatch: (text) => theme.fg("warning", text),
 			});
 			list.onSelect = (item) => done(item.value);
 			list.onCancel = () => done(undefined);
-			container.addChild(list);
-			const help = new Text("", 1, 0);
+			const listBox = new Box(2, 0);
+			listBox.addChild(list);
+			container.addChild(listBox);
+			const help = new Text("", 2, 1);
 			container.addChild(help);
 			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
 			const updateDisplay = () => {
-				title.setText(theme.fg("accent", theme.bold("Switch Codex account")));
+				const accountLabel = items.length === 1 ? "1 saved account" : `${items.length} saved accounts`;
+				header.setText([
+					theme.fg("accent", theme.bold("Switch Codex account")),
+					theme.fg("muted", `${accountLabel} · current account marked active`),
+				].join("\n"));
 				const up = keybindings.getKeys("tui.select.up").join("/");
 				const down = keybindings.getKeys("tui.select.down").join("/");
 				const confirm = keybindings.getKeys("tui.select.confirm").join("/");
