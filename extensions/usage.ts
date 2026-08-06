@@ -21,30 +21,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const PROVIDER_ID = "openai-codex";
-
 const CHATGPT_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_TIMEOUT_MS = 10_000;
+const USER_AGENT = "pi-usage/0.1.0";
 
-function accountIdFromAccessToken(access: string): string | undefined {
+function authFromAccessToken(access: string): { accountId?: string; isFedRamp: boolean } {
 	try {
 		const encoded = access.split(".")[1];
-		if (!encoded) return undefined;
+		if (!encoded) return { isFedRamp: false };
 		const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
-		if (!isRecord(payload)) return undefined;
-		const claim = payload["https://api.openai.com/auth"];
-		const accountId = isRecord(claim) ? claim.chatgpt_account_id : undefined;
-		return typeof accountId === "string" && accountId ? accountId : undefined;
+		const claim = isRecord(payload) ? payload["https://api.openai.com/auth"] : undefined;
+		if (!isRecord(claim)) return { isFedRamp: false };
+		const accountId = typeof claim.chatgpt_account_id === "string" ? claim.chatgpt_account_id : undefined;
+		return { accountId: accountId || undefined, isFedRamp: claim.chatgpt_account_is_fedramp === true };
 	} catch {
-		return undefined;
+		return { isFedRamp: false };
 	}
 }
 
 function codexApiBaseUrl(raw: string): string {
-	let baseUrl = raw
-		.trim()
-		.replace(/\/+$/, "")
-		.replace(/\/backend-api\/codex(?:\/responses)?$/, "/backend-api")
-		.replace(/\/api\/codex(?:\/responses)?$/, "");
+	let baseUrl = raw.trim().replace(/\/+$/, "");
 	if (
 		/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)(?:\/|$)/.test(baseUrl) &&
 		!baseUrl.includes("/backend-api")
@@ -54,11 +50,7 @@ function codexApiBaseUrl(raw: string): string {
 	return baseUrl;
 }
 
-async function requestCodex(
-	ctx: ExtensionContext,
-	path: string,
-	options: { signal?: AbortSignal; allow404?: boolean } = {},
-): Promise<unknown> {
+async function requestUsage(ctx: ExtensionContext, signal?: AbortSignal): Promise<UsagePayload> {
 	const resolved = await ctx.modelRegistry.getProviderAuth(PROVIDER_ID);
 	const access = resolved?.auth.apiKey;
 	if (!access) {
@@ -76,68 +68,72 @@ async function requestCodex(
 		Object.entries(resolved.auth.headers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 	);
 	headers.set("authorization", `Bearer ${access}`);
-	const accountId = accountIdFromAccessToken(access) ?? headers.get("chatgpt-account-id");
-	if (accountId) headers.set("chatgpt-account-id", accountId);
+	const tokenAuth = authFromAccessToken(access);
+	if (tokenAuth.accountId && !headers.has("chatgpt-account-id")) {
+		headers.set("chatgpt-account-id", tokenAuth.accountId);
+	}
+	if (tokenAuth.isFedRamp && !headers.has("x-openai-fedramp")) {
+		headers.set("x-openai-fedramp", "true");
+	}
 	headers.set("user-agent", USER_AGENT);
 
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+	const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 	const prefix = baseUrl.includes("/backend-api") ? "/wham" : "/api/codex";
-	const response = await fetch(`${baseUrl}${prefix}${path}`, { headers, signal });
+	const response = await fetch(`${baseUrl}${prefix}/usage`, { headers, signal: requestSignal });
 	const text = await response.text();
-	if (response.status === 404 && options.allow404) return undefined;
 	if (!response.ok) {
 		const detail = text.replace(/\s+/g, " ").trim().slice(0, 200);
-		throw new Error(`GET ${path} failed with status ${response.status}${detail ? `: ${detail}` : ""}`);
+		throw new Error(`GET /usage failed with status ${response.status}${detail ? `: ${detail}` : ""}`);
 	}
-	if (!text.trim()) return {};
+	if (!text.trim()) throw new Error("GET /usage returned an empty response");
+	let payload: unknown;
 	try {
-		return JSON.parse(text) as unknown;
+		payload = JSON.parse(text);
 	} catch {
-		throw new Error(`GET ${path} returned invalid JSON`);
+		throw new Error("GET /usage returned invalid JSON");
 	}
+	if (!isRecord(payload) || typeof payload.plan_type !== "string") {
+		throw new Error("GET /usage returned an invalid payload");
+	}
+	return payload as UsagePayload;
 }
 
-const USER_AGENT = "pi-usage/0.1.0";
-
 type RateLimitWindow = {
-	used_percent?: number;
-	limit_window_seconds?: number;
-	reset_after_seconds?: number;
-	reset_at?: number;
+	used_percent: number;
+	limit_window_seconds: number;
+	reset_after_seconds: number;
+	reset_at: number;
 };
 type RateLimitDetails = {
-	allowed?: boolean;
-	limit_reached?: boolean;
+	allowed: boolean;
+	limit_reached: boolean;
 	primary_window?: RateLimitWindow | null;
 	secondary_window?: RateLimitWindow | null;
 };
 type AdditionalRateLimit = {
-	limit_id?: string;
-	limit_name?: string;
-	metered_feature?: string;
+	limit_name: string;
+	metered_feature: string;
 	rate_limit?: RateLimitDetails | null;
 };
 type UsagePayload = {
 	email?: string;
-	account_id?: string;
-	plan_type?: string;
+	plan_type: string;
 	rate_limit?: RateLimitDetails | null;
 	code_review_rate_limit?: RateLimitDetails | null;
-	code_review_rate_limits?: RateLimitDetails | null;
 	credits?: {
-		has_credits?: boolean;
-		unlimited?: boolean;
+		has_credits: boolean;
+		unlimited: boolean;
 		overage_limit_reached?: boolean;
-		balance?: string | Record<string, unknown> | null;
+		balance?: string | null;
 	} | null;
 	spend_control?: {
-		reached?: boolean;
+		reached: boolean;
 		individual_limit?: {
-			limit?: string;
-			used?: string;
-			used_percent?: number;
-			reset_at?: number;
+			limit: string;
+			used: string;
+			remaining_percent: number;
+			reset_at: number;
 		} | null;
 	} | null;
 	additional_rate_limits?: Array<AdditionalRateLimit> | null;
@@ -145,32 +141,17 @@ type UsagePayload = {
 	rate_limit_reset_credits?: { available_count?: number } | null;
 };
 
-type AccountRecord = {
-	id?: string | null;
-	account_id?: string | null;
-	name?: string | null;
-	structure?: string | null;
-};
-type AccountsPayload = {
-	accounts?: Record<string, { account?: AccountRecord | null }> | AccountRecord[] | null;
-	account_ordering?: string[] | null;
-	default_account_id?: string | null;
-};
-
-type Snapshot = { usage: UsagePayload; accounts?: AccountsPayload };
-
 const BAR_CELLS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
-function codexPlanLabel(planType: string | undefined): string | undefined {
-	if (!planType) return undefined;
+function codexPlanLabel(planType: string): string {
 	const labels: Record<string, string> = {
 		free: "Free",
 		go: "Go",
 		plus: "Plus",
 		pro: "Pro",
 		prolite: "Pro Lite",
-		team: "Team",
-		business: "Business",
+		team: "Business",
+		business: "Enterprise",
 		self_serve_business_prolite: "Business",
 		enterprise: "Enterprise",
 		ent26: "Enterprise",
@@ -179,11 +160,10 @@ function codexPlanLabel(planType: string | undefined): string | undefined {
 		education: "Edu",
 		guest: "Guest",
 		free_workspace: "Free workspace",
-		self_serve_business_usage_based: "Business (usage-based)",
-		enterprise_cbp_usage_based: "Enterprise (usage-based)",
+		self_serve_business_usage_based: "Business",
+		enterprise_cbp_usage_based: "Enterprise",
 		quorum: "Quorum",
 		k12: "K-12",
-		hc: "Enterprise",
 	};
 	return labels[planType.toLowerCase()] ?? planType;
 }
@@ -258,30 +238,39 @@ function windowResetAt(window: RateLimitWindow, now = Date.now()): number | unde
 	return undefined;
 }
 
-function windowTitle(window: RateLimitWindow): string {
-	const seconds = window.limit_window_seconds ?? 0;
-	if (seconds >= 7 * 24 * 60 * 60) return "Current week";
-	if (seconds >= 24 * 60 * 60) return "Current day";
-	return "Current session";
+function approximateDuration(seconds: number): string | undefined {
+	const durations: Array<[number, string]> = [
+		[5 * 60 * 60, "5h"],
+		[24 * 60 * 60, "Daily"],
+		[7 * 24 * 60 * 60, "Weekly"],
+		[30 * 24 * 60 * 60, "Monthly"],
+		[365 * 24 * 60 * 60, "Annual"],
+	];
+	return durations.find(([expected]) => seconds >= expected * 0.95 && seconds <= expected * 1.05)?.[1];
 }
 
-function gaugeForWindow(window: RateLimitWindow | null | undefined, scope: string | undefined): Gauge | undefined {
-	if (!window || window.used_percent === undefined) return undefined;
-	const title = windowTitle(window);
-	const suffix = scope && (scope !== "all models" || title !== "Current session") ? ` (${scope})` : "";
+function gaugeForWindow(
+	window: RateLimitWindow | null | undefined,
+	scope: string | undefined,
+	fallbackTitle: string,
+): Gauge | undefined {
+	if (!window) return undefined;
+	const duration = approximateDuration(window.limit_window_seconds);
+	const title = `${scope ? `${scope} ` : ""}${duration ?? fallbackTitle} limit`;
 	return {
-		title: `${title}${suffix}`,
+		title,
 		utilization: window.used_percent,
 		resetsAt: windowResetAt(window),
-		alwaysShowDate: title !== "Current session",
+		alwaysShowDate: window.limit_window_seconds >= 24 * 60 * 60,
 	};
 }
 
 function gaugesForLimit(details: RateLimitDetails | null | undefined, scope: string | undefined): Gauge[] {
 	if (!details) return [];
-	const gauges = [gaugeForWindow(details.primary_window, scope), gaugeForWindow(details.secondary_window, scope)].filter(
-		(gauge): gauge is Gauge => gauge !== undefined,
-	);
+	const gauges = [
+		gaugeForWindow(details.primary_window, scope, "Usage"),
+		gaugeForWindow(details.secondary_window, scope, "Secondary usage"),
+	].filter((gauge): gauge is Gauge => gauge !== undefined);
 
 	const last = gauges.at(-1);
 	if (last) {
@@ -292,15 +281,11 @@ function gaugesForLimit(details: RateLimitDetails | null | undefined, scope: str
 }
 
 function limitScope(limit: AdditionalRateLimit): string {
-	const name = limit.limit_name?.trim();
-	if (name) return name;
-	const identifier = `${limit.limit_id ?? ""} ${limit.metered_feature ?? ""}`.toLowerCase();
-	if (identifier.includes("bengalfox") || identifier.includes("spark")) return "Spark";
-	return limit.metered_feature?.trim() || "extra";
+	return limit.limit_name.trim() || limit.metered_feature.trim() || "Additional";
 }
 
-function creditAmount(raw: string | Record<string, unknown> | null | undefined): string | undefined {
-	if (typeof raw !== "string") return undefined;
+function creditAmount(raw: string | null | undefined): string | undefined {
+	if (!raw) return undefined;
 	const value = Number(raw.trim());
 	if (!Number.isFinite(value) || value <= 0) return undefined;
 	return Math.round(value).toLocaleString("en-US");
@@ -315,44 +300,16 @@ function creditsText(credits: UsagePayload["credits"]): string | undefined {
 	return credits.overage_limit_reached ? `${text} · overage limit reached` : text;
 }
 
-function accountRecords(accounts: AccountsPayload | undefined): AccountRecord[] {
-	if (!accounts) return [];
-	if (Array.isArray(accounts.accounts)) return accounts.accounts;
-	const byId = accounts.accounts ?? {};
-	const ordering = (accounts.account_ordering ?? []).filter((id) => id in byId);
-	const keys = [...ordering, ...Object.keys(byId).filter((id) => !ordering.includes(id))];
-	return keys.map((id) => byId[id]?.account).filter((record): record is AccountRecord => Boolean(record));
-}
-
-function accountDescriptor(snapshot: Snapshot): string | undefined {
-	const records = accountRecords(snapshot.accounts);
-	if (records.length === 0) return undefined;
-	const activeId = snapshot.usage.account_id ?? snapshot.accounts?.default_account_id;
-	const active = records.find((record) => (record.id ?? record.account_id) === activeId) ?? records[0]!;
-
-	const name = active.name?.trim();
-	const structure = active.structure?.trim();
-	if (name) return structure ? `${name} (${structure})` : name;
-	if (structure) return structure === "personal" ? "Personal" : structure;
-	return active.id ?? active.account_id ?? undefined;
-}
-
-function accountSectionFor(snapshot: Snapshot): Header {
-	const { usage } = snapshot;
-	const who = [usage.email?.trim(), accountDescriptor(snapshot), `${codexPlanLabel(usage.plan_type) ?? "unknown"} plan`].filter(
-		Boolean,
-	);
+function accountSectionFor(usage: UsagePayload): Header {
+	const who = [usage.email?.trim(), `${codexPlanLabel(usage.plan_type)} plan`].filter(Boolean);
 	return { title: "Account", subtitle: who.join(" · ") };
 }
 
-function limitSectionsFor(snapshot: Snapshot): Section[] {
-	const { usage } = snapshot;
+function limitSectionsFor(usage: UsagePayload): Section[] {
 	const sections: Section[] = [];
 
 	const extra = (usage.additional_rate_limits ?? []).filter((limit) => limit.rate_limit);
-	const codeReview = usage.code_review_rate_limit ?? usage.code_review_rate_limits;
-	const scoped = extra.length > 0 || Boolean(codeReview);
-	const main = gaugesForLimit(usage.rate_limit, scoped ? "all models" : undefined);
+	const main = gaugesForLimit(usage.rate_limit, undefined);
 	const reached = usage.rate_limit_reached_type?.type?.replace(/_/g, " ").trim();
 	const lastMain = main[main.length - 1];
 	if (reached && lastMain && !lastMain.trailing) {
@@ -361,15 +318,15 @@ function limitSectionsFor(snapshot: Snapshot): Section[] {
 	sections.push(...main);
 
 	for (const limit of extra) sections.push(...gaugesForLimit(limit.rate_limit, limitScope(limit)));
-	sections.push(...gaugesForLimit(codeReview, "code review"));
+	sections.push(...gaugesForLimit(usage.code_review_rate_limit, "code review"));
 
 	const spend = usage.spend_control?.individual_limit;
-	if (spend?.used_percent !== undefined) {
+	if (spend) {
 		const used = creditAmount(spend.used);
 		const limit = creditAmount(spend.limit);
 		sections.push({
 			title: "Monthly credit limit",
-			utilization: spend.used_percent,
+			utilization: 100 - spend.remaining_percent,
 			resetsAt: spend.reset_at,
 			showTime: false,
 			alwaysShowDate: true,
@@ -428,20 +385,9 @@ function renderSection(section: Section, theme: Theme, maxWidth: number): string
 	return [theme.bold(section.title), theme.fg("dim", section.subtitle)];
 }
 
-async function loadSnapshot(ctx: ExtensionCommandContext, signal?: AbortSignal): Promise<Snapshot> {
-	const [usage, accounts] = await Promise.all([
-		requestCodex(ctx, "/usage", { signal }),
-		requestCodex(ctx, "/accounts/check", { signal, allow404: true }).catch(() => undefined),
-	]);
-	return {
-		usage: (usage ?? {}) as UsagePayload,
-		accounts: accounts as AccountsPayload | undefined,
-	};
-}
-
-function renderPlainReport(snapshot: Snapshot): string {
+function renderPlainReport(usage: UsagePayload): string {
 	const lines: string[] = [];
-	for (const section of [accountSectionFor(snapshot), ...limitSectionsFor(snapshot)]) {
+	for (const section of [accountSectionFor(usage), ...limitSectionsFor(usage)]) {
 		if (!isGauge(section)) {
 			lines.push(`${section.title}: ${section.subtitle}`);
 			continue;
@@ -457,7 +403,7 @@ class UsageComponent implements Component {
 	private cache?: { width: number; lines: string[] };
 
 	constructor(
-		private readonly snapshot: Snapshot,
+		private readonly usage: UsagePayload,
 		private readonly theme: Theme,
 		private readonly done: (action: "refresh" | "close") => void,
 	) {}
@@ -482,8 +428,8 @@ class UsageComponent implements Component {
 		const maxWidth = Math.max(1, Math.min(width, 80));
 		const lines: string[] = [];
 
-		lines.push(...renderSection(accountSectionFor(this.snapshot), this.theme, maxWidth));
-		const sections = limitSectionsFor(this.snapshot);
+		lines.push(...renderSection(accountSectionFor(this.usage), this.theme, maxWidth));
+		const sections = limitSectionsFor(this.usage);
 		if (sections.length === 0) {
 			lines.push("", this.theme.fg("dim", "No limit data available"));
 		}
@@ -512,8 +458,8 @@ export default function usage(pi: ExtensionAPI) {
 				}
 				busy = true;
 				try {
-					const snapshot = await loadSnapshot(ctx);
-					const content = renderPlainReport(snapshot);
+					const usage = await requestUsage(ctx);
+					const content = renderPlainReport(usage);
 					pi.sendMessage({ customType: "usage", content, display: true }, { triggerTurn: false });
 				} catch (error) {
 					const message = `Couldn't load usage: ${errorText(error)}`;
@@ -527,16 +473,16 @@ export default function usage(pi: ExtensionAPI) {
 
 			while (true) {
 				let loadError: string | undefined;
-				const snapshot = await ctx.ui.custom<Snapshot | null>((tui, theme, _keybindings, done) => {
+				const usage = await ctx.ui.custom<UsagePayload | null>((tui, theme, _keybindings, done) => {
 					const loader = new BorderedLoader(tui, theme, "Loading usage data...");
 					let settled = false;
-					const finish = (value: Snapshot | null) => {
+					const finish = (value: UsagePayload | null) => {
 						if (settled) return;
 						settled = true;
 						done(value);
 					};
 					loader.onAbort = () => finish(null);
-					void loadSnapshot(ctx, loader.signal)
+					void requestUsage(ctx, loader.signal)
 						.then(finish)
 						.catch((error: unknown) => {
 							loadError = errorText(error);
@@ -545,7 +491,7 @@ export default function usage(pi: ExtensionAPI) {
 					return loader;
 				});
 
-				if (!snapshot) {
+				if (!usage) {
 					if (!loadError) return;
 					const retry = await ctx.ui.confirm("Couldn't load usage", `${loadError}\n\nRetry?`);
 					if (!retry) return;
@@ -553,7 +499,7 @@ export default function usage(pi: ExtensionAPI) {
 				}
 
 				const action = await ctx.ui.custom<"refresh" | "close">((_tui, theme, _keybindings, done) =>
-					new UsageComponent(snapshot, theme, done),
+					new UsageComponent(usage, theme, done),
 				);
 				if (action !== "refresh") return;
 			}
