@@ -1,19 +1,11 @@
-// Standalone Talk extension adapted from:
-// https://github.com/Joselay/pi-kit/tree/main/extensions/talk
-// Runtime files: $XDG_CACHE_HOME/pi/talk (default ~/.cache/pi/talk).
-
-// extensions/lib/audio.ts
 import { spawn, execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
-// assets/talk/talk-audio.swift
 var talk_audio_default = 'import AVFoundation\nimport Foundation\nimport os\n\nlet sampleRate = 24_000.0\n\nfunc warn(_ message: String) {\n    FileHandle.standardError.write(Data(("voice-audio: " + message + "\\n").utf8))\n}\n\nfinal class PlaybackRing {\n    private let capacity = Int(sampleRate) * 120\n    private var buffer: [Float]\n    private var head = 0\n    private var count = 0\n    private let lock: UnsafeMutablePointer<os_unfair_lock_s> = {\n        let pointer = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)\n        pointer.initialize(to: os_unfair_lock_s())\n        return pointer\n    }()\n\n    init() {\n        buffer = [Float](repeating: 0, count: capacity)\n    }\n\n    func push(_ source: UnsafePointer<Float>, _ frames: Int) {\n        guard frames > 0 else { return }\n        var source = source\n        var frames = frames\n        if frames > capacity {\n            source = source.advanced(by: frames - capacity)\n            frames = capacity\n        }\n        os_unfair_lock_lock(lock)\n        defer { os_unfair_lock_unlock(lock) }\n        if count + frames > capacity {\n            let drop = count + frames - capacity\n            head = (head + drop) % capacity\n            count -= drop\n        }\n        var tail = (head + count) % capacity\n        buffer.withUnsafeMutableBufferPointer { destination in\n            guard let base = destination.baseAddress else { return }\n            var left = frames\n            var from = source\n            while left > 0 {\n                let chunk = min(left, capacity - tail)\n                base.advanced(by: tail).update(from: from, count: chunk)\n                from = from.advanced(by: chunk)\n                tail = (tail + chunk) % capacity\n                left -= chunk\n            }\n        }\n        count += frames\n    }\n\n    func pop(into out: UnsafeMutablePointer<Float>, count wanted: Int) {\n        os_unfair_lock_lock(lock)\n        let available = min(wanted, count)\n        var index = head\n        buffer.withUnsafeMutableBufferPointer { source in\n            guard let base = source.baseAddress else { return }\n            var left = available\n            var to = out\n            while left > 0 {\n                let chunk = min(left, capacity - index)\n                to.update(from: base.advanced(by: index), count: chunk)\n                to = to.advanced(by: chunk)\n                index = (index + chunk) % capacity\n                left -= chunk\n            }\n        }\n        head = index\n        count -= available\n        os_unfair_lock_unlock(lock)\n        if available < wanted {\n            out.advanced(by: available).update(repeating: 0, count: wanted - available)\n        }\n    }\n\n    func clear() {\n        os_unfair_lock_lock(lock)\n        head = 0\n        count = 0\n        os_unfair_lock_unlock(lock)\n    }\n}\n\nfinal class StdoutWriter {\n    private var pending: [Data] = []\n    private let condition = NSCondition()\n    private let maxPending = 200\n\n    init() {\n        let thread = Thread { [self] in run() }\n        thread.name = "voice-audio.stdout"\n        thread.qualityOfService = .userInitiated\n        thread.start()\n    }\n\n    func write(_ data: Data) {\n        condition.lock()\n        if pending.count >= maxPending {\n            pending.removeFirst(pending.count - maxPending + 1)\n        }\n        pending.append(data)\n        condition.signal()\n        condition.unlock()\n    }\n\n    private func run() {\n        while true {\n            condition.lock()\n            while pending.isEmpty { condition.wait() }\n            let batch = pending\n            pending.removeAll(keepingCapacity: true)\n            condition.unlock()\n            for chunk in batch where !writeAll(chunk) {\n                exit(0)\n            }\n        }\n    }\n\n    private func writeAll(_ data: Data) -> Bool {\n        data.withUnsafeBytes { raw -> Bool in\n            guard var pointer = raw.baseAddress else { return true }\n            var left = raw.count\n            while left > 0 {\n                let written = Foundation.write(1, pointer, left)\n                if written > 0 {\n                    pointer = pointer.advanced(by: written)\n                    left -= written\n                    continue\n                }\n                if written < 0 && errno == EINTR { continue }\n                if written < 0 && errno == EAGAIN {\n                    usleep(1000)\n                    continue\n                }\n                return false\n            }\n            return true\n        }\n    }\n}\n\nfinal class VoiceEngine {\n    let ring = PlaybackRing()\n    private let engine = AVAudioEngine()\n    private let stdout = StdoutWriter()\n    private let ioFormat: AVAudioFormat\n    private let micFormat: AVAudioFormat\n    private var sourceNode: AVAudioSourceNode?\n    private var converter: AVAudioConverter?\n    private let configQueue = DispatchQueue(label: "voice-audio.config")\n    private var running = false\n    private var rebuildGeneration = 0\n\n    private(set) var echoCancelled = false\n\n    init?() {\n        guard let io = AVAudioFormat(\n            commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false\n        ), let mic = AVAudioFormat(\n            commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: true\n        ) else {\n            warn("could not create audio formats")\n            return nil\n        }\n        ioFormat = io\n        micFormat = mic\n    }\n\n    func start() throws {\n        do {\n            try engine.inputNode.setVoiceProcessingEnabled(true)\n            echoCancelled = true\n        } catch {\n            warn("voice processing unavailable, echo cancellation disabled: \\(error.localizedDescription)")\n        }\n        try configure()\n        try engine.start()\n        running = true\n\n        NotificationCenter.default.addObserver(\n            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil\n        ) { [weak self] _ in\n            self?.scheduleRebuild()\n        }\n    }\n\n    private func configure() throws {\n        let outputFormat = engine.outputNode.outputFormat(forBus: 0)\n        let inputRate = engine.inputNode.outputFormat(forBus: 0).sampleRate\n        guard inputRate > 0, outputFormat.sampleRate > 0 else {\n            throw NSError(\n                domain: "voice-audio", code: 1,\n                userInfo: [NSLocalizedDescriptionKey: "no usable audio device (input \\(inputRate) Hz)"],\n            )\n        }\n        guard let inputFormat = AVAudioFormat(\n            commonFormat: .pcmFormatFloat32, sampleRate: inputRate, channels: 1, interleaved: false\n        ), let converter = AVAudioConverter(from: inputFormat, to: micFormat) else {\n            throw NSError(\n                domain: "voice-audio", code: 2,\n                userInfo: [NSLocalizedDescriptionKey: "could not convert mic audio from \\(inputRate) Hz"],\n            )\n        }\n        self.converter = converter\n\n        if sourceNode == nil {\n            let ring = ring\n            let node = AVAudioSourceNode(format: ioFormat) { _, _, frameCount, audioBufferList -> OSStatus in\n                let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)\n                guard let data = buffers[0].mData else { return noErr }\n                ring.pop(into: data.assumingMemoryBound(to: Float.self), count: Int(frameCount))\n                return noErr\n            }\n            sourceNode = node\n            engine.attach(node)\n        }\n        guard let sourceNode else { return }\n        engine.connect(sourceNode, to: engine.mainMixerNode, format: ioFormat)\n        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)\n\n        engine.inputNode.removeTap(onBus: 0)\n        engine.inputNode.installTap(onBus: 0, bufferSize: 960, format: inputFormat) { [weak self] buffer, _ in\n            self?.emit(buffer)\n        }\n        warn("engine at \\(outputFormat.sampleRate) Hz/\\(outputFormat.channelCount) ch out, \\(inputRate) Hz in")\n    }\n\n    private func emit(_ buffer: AVAudioPCMBuffer) {\n        guard let converter, buffer.frameLength > 0 else { return }\n        let ratio = sampleRate / buffer.format.sampleRate\n        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16\n        guard let converted = AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: capacity) else { return }\n        var fed = false\n        var conversionError: NSError?\n        converter.convert(to: converted, error: &conversionError) { _, status in\n            if fed {\n                status.pointee = .noDataNow\n                return nil\n            }\n            fed = true\n            status.pointee = .haveData\n            return buffer\n        }\n        if let conversionError {\n            warn("mic conversion failed: \\(conversionError.localizedDescription)")\n            return\n        }\n        guard converted.frameLength > 0, let channel = converted.int16ChannelData else { return }\n        stdout.write(Data(bytes: channel[0], count: Int(converted.frameLength) * 2))\n    }\n\n    private func scheduleRebuild() {\n        configQueue.async { [self] in\n            rebuildGeneration += 1\n            let generation = rebuildGeneration\n            configQueue.asyncAfter(deadline: .now() + 0.2) { [self] in\n                guard generation == rebuildGeneration, running else { return }\n                rebuild()\n            }\n        }\n    }\n\n    private func rebuild() {\n        warn("audio route changed, rebuilding")\n        engine.stop()\n        do {\n            try configure()\n            try engine.start()\n        } catch {\n            warn("failed to rebuild audio engine: \\(error.localizedDescription)")\n        }\n    }\n}\n\nsignal(SIGPIPE, SIG_IGN)\n\nswitch AVCaptureDevice.authorizationStatus(for: .audio) {\ncase .authorized:\n    break\ncase .notDetermined:\n    let granted = DispatchSemaphore(value: 0)\n    var allowed = false\n    AVCaptureDevice.requestAccess(for: .audio) { ok in\n        allowed = ok\n        granted.signal()\n    }\n    if granted.wait(timeout: .now() + 30) == .timedOut || !allowed {\n        warn("microphone access was not granted")\n        exit(1)\n    }\ndefault:\n    warn("microphone access denied; enable it in System Settings > Privacy & Security > Microphone")\n    exit(1)\n}\n\nguard let voice = VoiceEngine() else { exit(1) }\n\nsignal(SIGUSR1, SIG_IGN)\nlet flushSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .global())\nflushSource.setEventHandler { voice.ring.clear() }\nflushSource.resume()\n\nDispatchQueue.global(qos: .userInitiated).async {\n    let input = FileHandle.standardInput\n    var pending = Data()\n    var floats: [Float] = []\n    while true {\n        let data = input.availableData\n        if data.isEmpty { exit(0) }\n        if pending.isEmpty { pending = data } else { pending.append(data) }\n        let usable = pending.count & ~1\n        if usable == 0 { continue }\n        let frames = usable / 2\n        if floats.count < frames { floats = [Float](repeating: 0, count: frames) }\n        pending.withUnsafeBytes { raw in\n            for index in 0..<frames {\n                floats[index] = Float(raw.loadUnaligned(fromByteOffset: index * 2, as: Int16.self)) / 32768.0\n            }\n        }\n        floats.withUnsafeBufferPointer { buffer in\n            guard let base = buffer.baseAddress else { return }\n            voice.ring.push(base, frames)\n        }\n        pending = usable < pending.count ? pending.subdata(in: usable..<pending.count) : Data()\n    }\n}\n\ndo {\n    try voice.start()\n} catch {\n    warn("audio engine failed to start: \\(error.localizedDescription)")\n    exit(1)\n}\n\nwarn("ready aec=\\(voice.echoCancelled ? 1 : 0)")\ndispatchMain()\n';
 
-// extensions/lib/audio.ts
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-// extensions/lib/util.ts
 function errorText(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -36,12 +28,11 @@ function notify(ctx, message, level = "info") {
   if (ctx.hasUI) ctx.ui.notify(message, level);
 }
 
-// extensions/lib/audio.ts
 var DEBUG_LOG = process.env.PI_TALK_DEBUG?.trim();
 function audioDebug(line) {
   if (!DEBUG_LOG) return;
   try {
-    appendFileSync(DEBUG_LOG, `${(/* @__PURE__ */ new Date()).toISOString().slice(11, 23)} ${line}
+    appendFileSync(DEBUG_LOG, `${(new Date()).toISOString().slice(11, 23)} ${line}
 `);
   } catch {
   }
@@ -200,7 +191,6 @@ async function ensureAecAudio() {
   return new AecAudio();
 }
 
-// extensions/lib/codex.ts
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 var PROVIDER_ID = "openai-codex";
 function authClaim(access) {
@@ -250,7 +240,6 @@ async function realtimeCredentials(feature) {
   return { token, accountId: accountIdFromAccessToken(token) };
 }
 
-// extensions/lib/realtime.ts
 var CONNECT_TIMEOUT_MS = 1e4;
 var CLOSE_GRACE_MS = 1500;
 var AUTH_HINT = "run /login if this persists";
@@ -399,14 +388,12 @@ async function openRealtimeSession(config) {
   };
 }
 
-// extensions/talk/context.ts
 import { execFileSync } from "node:child_process";
 import { closeSync, openSync, readdirSync, readSync, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2, userInfo } from "node:os";
 import { join as join2 } from "node:path";
 import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 
-// extensions/lib/git.ts
 import { execFile as execFile2 } from "node:child_process";
 function directExec(timeoutMs = 1e3) {
   return (args, options) => new Promise((resolve) => {
@@ -538,7 +525,6 @@ function parseStatusEntries(entries) {
   return parsed;
 }
 
-// extensions/talk/context.ts
 var APPROX_BYTES_PER_TOKEN = 4;
 function approxTokenCount(text) {
   return Math.ceil(Buffer.byteLength(text, "utf8") / APPROX_BYTES_PER_TOKEN);
@@ -596,7 +582,7 @@ var MAX_ASK_CHARS = 240;
 var SESSION_HEAD_BYTES = 64 * 1024;
 var TREE_MAX_DEPTH = 2;
 var DIR_ENTRY_LIMIT = 20;
-var NOISY_DIR_NAMES = /* @__PURE__ */ new Set([
+var NOISY_DIR_NAMES = new Set([
   ".git",
   ".next",
   ".pytest_cache",
@@ -725,8 +711,8 @@ function clipAsk(ask) {
 async function buildRecentWorkSection(cwd) {
   const files = listSessionFiles();
   if (!files) return void 0;
-  const groups = /* @__PURE__ */ new Map();
-  const rootCache = /* @__PURE__ */ new Map();
+  const groups = new Map();
+  const rootCache = new Map();
   for (const file of files.slice(0, MAX_RECENT_THREADS)) {
     const summary = readSessionSummary(file.path, file.mtimeMs);
     if (!summary) continue;
@@ -758,7 +744,7 @@ async function buildRecentWorkSection(cwd) {
       "",
       "User asks:"
     ];
-    const seen = /* @__PURE__ */ new Set();
+    const seen = new Set();
     const maxAsks = group.root === currentRoot ? MAX_CURRENT_CWD_ASKS : MAX_OTHER_CWD_ASKS;
     for (const entry of group.entries) {
       if (!entry.ask) continue;
@@ -849,10 +835,8 @@ ${parts.join("\n\n")}
 </startup_context>`;
 }
 
-// extensions/talk/panel.ts
 import { truncateToWidth as truncateToWidth2, visibleWidth as visibleWidth2 } from "@earendil-works/pi-tui";
 
-// extensions/talk/globe.ts
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 var STATE_COLORS = {
   connecting: [
@@ -1271,7 +1255,6 @@ var TalkVisual = class {
   }
 };
 
-// extensions/talk/panel.ts
 var PANEL_ROWS = 8;
 var LABEL_W = 4;
 var ORB_GUTTER = 2;
@@ -1357,7 +1340,6 @@ var TalkPanel = class {
   }
 };
 
-// extensions/talk/conversation.ts
 var MAX_TRANSCRIPT_ENTRIES = 40;
 var MAX_TRACKED_IDS = 256;
 var BACKEND_PREFIX = "[BACKEND] ";
@@ -1371,8 +1353,8 @@ function newConversationState() {
   return {
     responseActive: false,
     pendingResponseCreate: false,
-    processedCalls: /* @__PURE__ */ new Set(),
-    settledItems: /* @__PURE__ */ new Set(),
+    processedCalls: new Set(),
+    settledItems: new Set(),
     transcript: [],
     visualState: "connecting"
   };
@@ -1634,7 +1616,6 @@ function reduce(state, input, env) {
   }
 }
 
-// extensions/talk/prompts.ts
 var REALTIME_TOOLS = [
   {
     type: "function",
@@ -1736,7 +1717,6 @@ Subsequent user input will return to typed text rather than transcript-style tex
 
 Reason: the user ended the talk session.`;
 
-// extensions/talk/index.ts
 var REALTIME_URL = "wss://api.openai.com/v1/realtime";
 var REALTIME_MODELS = [
   "gpt-realtime-2.1-mini",
@@ -1949,7 +1929,6 @@ ${startupContext}` : prompt;
   send(payload) {
     this.session?.send(payload);
   }
-  /** Feeds one input through the conversation and carries out what it asks. */
   dispatch(input) {
     if (this.closing) return;
     const commands = reduce(this.state, input, {
@@ -2058,12 +2037,6 @@ ${startupContext}` : prompt;
     this.outLevels.push({ start, end: this.playbackEndsAt, rms: pcmRms(buf) });
     if (this.outLevels.length > MAX_OUT_LEVELS) this.outLevels.splice(0, this.outLevels.length - MAX_OUT_LEVELS);
   }
-  /**
-   * How much of the current item the user has actually heard. Audio arrives far ahead of playback,
-   * so this counts from when this item's audio started rather than from what has been received,
-   * and never claims more than the item holds. Rounded down: this becomes `audio_end_ms` on a
-   * truncate, and the server rejects a value past the end of the audio it holds.
-   */
   playedMs() {
     if (!this.itemStartsAt) return 0;
     const itemMs = this.playedBytes / 2 / SAMPLE_RATE * 1e3;

@@ -1,7 +1,3 @@
-// Standalone build of Joselay/pi-kit extensions/dictate (commit 3b44674).
-// Source: https://github.com/Joselay/pi-kit/tree/main/extensions/dictate
-
-// dictate/index.ts
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -13,7 +9,6 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-// Inlined from extensions/lib/util.ts
 function errorText(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -25,10 +20,8 @@ function notify(ctx, message, level = "info") {
     ctx.ui.notify(message, level);
 }
 
-// Inlined from extensions/lib/audio.ts
 var SAMPLE_RATE = 24000;
 
-// Inlined from extensions/lib/codex.ts
 var PROVIDER_ID = "openai-codex";
 function authClaim(access) {
   try {
@@ -80,7 +73,6 @@ async function realtimeCredentials(feature) {
   return { token, accountId: accountIdFromAccessToken(token) };
 }
 
-// Inlined from extensions/lib/realtime.ts
 var CONNECT_TIMEOUT_MS = 1e4;
 var CLOSE_GRACE_MS = 1500;
 var AUTH_HINT = "run /login if this persists";
@@ -245,7 +237,6 @@ async function openRealtimeSession(config) {
   };
 }
 
-// Inlined from extensions/lib/state.ts
 var FILE_MODE = 0o600;
 function statePath(name) {
   const dir = join(homedir(), ".cache", "pi", "dictate");
@@ -286,7 +277,6 @@ function writeState(name, value) {
   }
 }
 
-// dictate/index.ts
 import {
   CURSOR_MARKER,
   isKeyRelease,
@@ -362,8 +352,6 @@ class Timer {
 function executable(fallback, candidates) {
   return candidates.find(existsSync) ?? fallback;
 }
-// Overrides make the extension usable when FFmpeg is installed elsewhere or
-// the Mac's microphone is not AVFoundation device 0.
 var FFMPEG = process.env.PI_DICTATE_FFMPEG?.trim() || executable("ffmpeg", ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
 var AUDIO_DEVICE = process.env.PI_DICTATE_AUDIO_DEVICE?.trim() || "0";
 async function audioDeviceDescription() {

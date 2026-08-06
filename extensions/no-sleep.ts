@@ -1,7 +1,3 @@
-/**
- * Prevent macOS from sleeping while the pi session is open.
- */
-
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn, type ChildProcess } from "node:child_process";
 

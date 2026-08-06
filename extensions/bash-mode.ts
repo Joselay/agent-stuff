@@ -76,7 +76,6 @@ function fitLabels(left: string, right: string, width: number, paint: Paint): st
 	return `${paint("─")}${fittedLeft}${paint("─".repeat(gap))}${fittedRight}${paint("─")}`;
 }
 
-/** pi bash prefixes are exactly `!` or `!!` (not `!!!+`). */
 function isBashModeText(text: string): boolean {
 	const trimmed = text.trimStart();
 	if (!trimmed.startsWith("!")) return false;
@@ -96,7 +95,6 @@ export default function bashMode(pi: ExtensionAPI): void {
 				afterInput: ({ editor }) => {
 					const text = editor.getText();
 					const trimmed = text.trimStart();
-					// pi core marks any leading `!` as bash; undo that for `!!!+`
 					if (!trimmed.startsWith("!") || isBashModeText(text)) return;
 					editor.borderColor = ctx.ui.theme.getThinkingBorderColor(pi.getThinkingLevel());
 				},

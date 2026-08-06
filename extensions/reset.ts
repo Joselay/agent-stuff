@@ -1,6 +1,3 @@
-// Standalone adaptation of Joselay/pi-kit extensions/reset (v0.2.0).
-// Original: https://github.com/Joselay/pi-kit/tree/main/extensions/reset
-
 import { randomUUID } from "node:crypto";
 import {
 	BorderedLoader,
@@ -344,7 +341,6 @@ export default function usageReset(pi: ExtensionAPI) {
 			const { credits } = await fetchResetCredits(codexAccount(ctx));
 			if (generation === warningGeneration && activeContext === ctx) showExpiryWarning(ctx, credits);
 		} catch {
-			// Best effort: /reset reports authentication and network errors interactively.
 		}
 	}
 
@@ -431,7 +427,6 @@ export default function usageReset(pi: ExtensionAPI) {
 						try {
 							remainingCount = (await fetchResetCredits(account, signal)).availableCount;
 						} catch {
-							// The reset succeeded; remaining-credit lookup is best effort.
 						}
 					}
 					return { result, remainingCount };

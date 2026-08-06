@@ -1,8 +1,3 @@
-/**
- * Standalone installation of Joselay/pi-kit extensions/usage.
- * Source: https://github.com/Joselay/pi-kit/tree/main/extensions/usage
- * Upstream commit: 06d95d2562c39cc34392ef1c3e22ce0e67cb994a
- */
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,

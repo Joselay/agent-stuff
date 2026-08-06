@@ -1,9 +1,3 @@
-/**
- * Emoji autocomplete and picker.
- * Adapted from Joselay/pi-kit extensions/emoji (MIT).
- * Dataset generated from github/gemoji and emojilib and stored under ~/.cache/pi.
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

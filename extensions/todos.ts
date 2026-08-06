@@ -1,34 +1,3 @@
-/**
- * This extension stores todo items as files under <todo-dir> (defaults to .pi/todos,
- * or the path in PI_TODO_PATH).  Each todo is a standalone markdown file named
- * <id>.md and an optional <id>.lock file is used while a session is editing it.
- *
- * File format in .pi/todos:
- * - The file starts with a JSON object (not YAML) containing the front matter:
- *   { id, title, tags, status, created_at, assigned_to_session }
- * - After the JSON block comes optional markdown body text separated by a blank line.
- * - Example:
- *   {
- *     "id": "deadbeef",
- *     "title": "Add tests",
- *     "tags": ["qa"],
- *     "status": "open",
- *     "created_at": "2026-01-25T17:00:00.000Z",
- *     "assigned_to_session": "session.json"
- *   }
- *
- *   Notes about the work go here.
- *
- * Todo storage settings are kept in <todo-dir>/settings.json.
- * Defaults:
- * {
- *   "gc": true,   // delete closed todos older than gcDays on startup
- *   "gcDays": 7   // age threshold for GC (days since created_at)
- * }
- *
- * Use `/todos` to bring up the visual todo manager or just let the LLM use them
- * naturally.
- */
 import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -790,7 +759,6 @@ async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Pr
 						await fs.unlink(filePath);
 					}
 				} catch {
-					// ignore unreadable todo
 				}
 			}),
 	);
@@ -983,7 +951,6 @@ async function acquireLock(
 				try {
 					await fs.unlink(lockPath);
 				} catch {
-					// ignore
 				}
 			};
 		} catch (error: any) {
@@ -1055,7 +1022,6 @@ async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
 				assigned_to_session: parsed.assigned_to_session,
 			});
 		} catch {
-			// ignore unreadable todo
 		}
 	}
 
@@ -1088,7 +1054,6 @@ function listTodosSync(todosDir: string): TodoFrontMatter[] {
 				assigned_to_session: parsed.assigned_to_session,
 			});
 		} catch {
-			// ignore
 		}
 	}
 

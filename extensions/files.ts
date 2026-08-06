@@ -1,11 +1,3 @@
-/**
- * Files Extension
- *
- * /files command lists files in the current git tree (plus session-referenced files)
- * and offers quick actions like reveal, open, edit, or diff.
- * /diff is kept as an alias to the same picker.
- */
-
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,

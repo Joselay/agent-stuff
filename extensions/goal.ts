@@ -1,11 +1,3 @@
-/**
- * Goal Extension
- *
- * Session-log-backed long-running objective mode. All state transitions are
- * appended as custom session entries and reconstructed from the active branch
- * on reload/tree navigation; no external database is used.
- */
-
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 

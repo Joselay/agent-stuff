@@ -1,10 +1,4 @@
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#   "websockets>=15,<17",
-# ]
-# ///
 """Transcribe audio/video through OpenAI Realtime using Pi's Codex OAuth."""
 
 from __future__ import annotations

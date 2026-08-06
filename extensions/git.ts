@@ -1,8 +1,3 @@
-/**
- * Standalone Git browser extension for Pi.
- * Adapted from Joselay/pi-kit@3b44674f70e071f3eebda04e88d6d75060231d1a.
- * Source: https://github.com/Joselay/pi-kit/tree/main/extensions/git
- */
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
@@ -37,7 +32,6 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
-// ── Git adapter ─────────────────────────────────────────────────────────────
 
 type GitOptions = { cwd?: string };
 type GitOutput =
@@ -135,7 +129,6 @@ function isUntracked(entry: GitStatusEntry): boolean {
   return entry.code.startsWith("?");
 }
 
-// ── Shared UI helpers ───────────────────────────────────────────────────────
 
 type NotifyLevel = "info" | "warning" | "error";
 
@@ -161,26 +154,19 @@ function selectListTheme(theme: Theme) {
   };
 }
 
-// ── Git data and diff formatting ────────────────────────────────────────────
 
-/** How far back the commit picker reaches. */
 const COMMIT_LIMIT = 50;
 
-/** Diffs larger than this are truncated before colouring. */
 const MAX_DIFF_LINES = 4000;
 
-/** Skip content-based diffs above this size (bytes per side). */
 const MAX_FILE_BYTES = 1_500_000;
 
 type GitScope =
   { kind: "uncommitted" } | { kind: "commit"; sha: string; title: string };
 
 type ChangedFile = {
-  /** Path relative to the repo root, forward slashes. */
   path: string;
-  /** Rename/copy source, when git reports one. */
   from?: string;
-  /** Single-letter status: M A D R C T U ? */
   status: string;
 };
 
@@ -196,10 +182,8 @@ type CommitInfo = {
 type FileDiff =
   | {
       kind: "text";
-      /** generateDiffString output — feed straight to renderDiff. */
       diff: string;
       firstChangedLine?: number;
-      /** Index into the diff lines of the first +/- change (for scroll-to-hunk). */
       firstChangeIndex?: number;
       truncated: boolean;
       additions: number;
@@ -218,7 +202,6 @@ function scopeLabel(scope: GitScope): string {
   }
 }
 
-/** Uncommitted is live; commit history is fixed. */
 function scopeIsLive(scope: GitScope): boolean {
   return scope.kind === "uncommitted";
 }
@@ -248,7 +231,6 @@ function statusColor(
   }
 }
 
-/** Parse `git diff --name-status -z` / `git diff-tree -z` payload. */
 function parseNameStatus(payload: string): ChangedFile[] {
   const parts = payload.split("\0").filter((part) => part.length > 0);
   const files: ChangedFile[] = [];
@@ -257,7 +239,6 @@ function parseNameStatus(payload: string): ChangedFile[] {
     const statusToken = parts[i];
     if (!statusToken) continue;
 
-    // Normal: STATUS\0path\0  — rename/copy: STATUS\0from\0to\0
     const status =
       statusToken.replace(/[0-9]+$/u, "").trim() || statusToken.trim();
     const letter = shortStatus(status);
@@ -280,14 +261,12 @@ function parseNameStatus(payload: string): ChangedFile[] {
   return files;
 }
 
-/** Collapse porcelain status into one letter the file list can show. */
 function statusLetterFromPorcelain(entry: GitStatusEntry): string | undefined {
   if (isUntracked(entry)) return "?";
 
   const index = entry.code[0] ?? " ";
   const work = entry.code[1] ?? " ";
 
-  // Prefer worktree letter, else index (covers staged + unstaged as one view).
   if (work !== " " && work !== "?") return work;
   if (index !== " " && index !== "?") return index;
   return "?";
@@ -302,8 +281,6 @@ async function listChangedFiles(
     case "uncommitted":
       return await listUncommitted(git, options);
     case "commit": {
-      // First parent only — must match resolveSides/loadFileDiff, or merge
-      // commits list files that then show "No textual changes."
       const parents = await git.lines(
         ["rev-list", "--parents", "-n", "1", scope.sha],
         options,
@@ -370,20 +347,16 @@ function uniqueFiles(files: ChangedFile[]): ChangedFile[] {
   return out;
 }
 
-/** Stable path order so the left pane is scannable. */
 function sortFiles(files: ChangedFile[]): ChangedFile[] {
   return [...files].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** One visible row in the file-pane tree (dirs + files). */
 type FileTreeRow =
   | {
       kind: "dir";
-      /** Display label, may be compacted (`extensions/git`). */
       name: string;
       depth: number;
       isLast: boolean;
-      /** Ancestor continuation flags: true = draw │ under that level. */
       guides: boolean[];
     }
   | {
@@ -403,10 +376,6 @@ type TreeNode = {
   file?: ChangedFile;
 };
 
-/**
- * Always-expanded tree from a file list.
- * Single-child directory chains collapse (`a/b/c.ts` → dir `a/b` + file).
- */
 function buildFileTree(files: ChangedFile[]): FileTreeRow[] {
   const root: TreeNode = { name: "", children: new Map() };
 
@@ -441,7 +410,6 @@ function buildFileTree(files: ChangedFile[]): FileTreeRow[] {
       return a.name.localeCompare(b.name);
     });
 
-  /** Fold a → a/b → a/b/c when each step is a lone directory. */
   const collapse = (node: TreeNode): { node: TreeNode; label: string } => {
     let label = node.name;
     let current = node;
@@ -460,7 +428,6 @@ function buildFileTree(files: ChangedFile[]): FileTreeRow[] {
     children.forEach((raw, index) => {
       const isLast = index === children.length - 1;
 
-      // Directory (has nested children). Optionally collapse chains.
       if (raw.children.size > 0) {
         const { node: dir, label } =
           raw.file === undefined
@@ -476,9 +443,6 @@ function buildFileTree(files: ChangedFile[]): FileTreeRow[] {
         walk(dir, depth + 1, [...guides, !(isLast && raw.file === undefined)]);
       }
 
-      // File leaf. When the path is also a dir prefix (rename leftovers),
-      // the file row follows the dir subtree as a sibling — the dir row
-      // above already kept isLast false and its guide open for it.
       if (raw.file !== undefined && raw.fileIndex !== undefined) {
         rows.push({
           kind: "file",
@@ -497,7 +461,6 @@ function buildFileTree(files: ChangedFile[]): FileTreeRow[] {
   return rows;
 }
 
-/** Prefix glyphs for a tree row (`│  ├─ ` / `   └─ `). */
 function treeRowPrefix(row: Pick<FileTreeRow, "guides" | "isLast">): string {
   let out = "";
   for (const cont of row.guides) {
@@ -625,10 +588,6 @@ async function loadFileDiff(
   }
 }
 
-/**
- * Index of the first added/removed line in a generateDiffString payload.
- * Used to open the right pane on the hunk instead of the top of a long context.
- */
 function findFirstChangeIndex(diff: string): number | undefined {
   if (!diff) return undefined;
   const lines = diff.split("\n");
@@ -664,7 +623,6 @@ async function resolveSides(
 
   switch (scope.kind) {
     case "uncommitted": {
-      // HEAD vs worktree covers staged + unstaged as one reading.
       oldBlob = await readRevision(git, "HEAD", from, options);
       newBlob =
         file.status === "D"
@@ -747,7 +705,6 @@ function readWorktree(relativePath: string, root?: string): BlobRead {
 function isProbablyBinary(text: string): boolean {
   if (!text) return false;
   if (text.includes("\0")) return true;
-  // High ratio of non-text bytes in a sample → treat as binary.
   const sample = text.slice(0, 8000);
   let weird = 0;
   for (let i = 0; i < sample.length; i += 1) {
@@ -781,14 +738,9 @@ type ColoredDiffLine = {
   background?: DiffBackground;
 };
 
-/**
- * High-contrast diff backgrounds blended from Night Owl's green/red accents
- * over its #011627 background. These are the original pi-kit diff colors.
- * Kept inline so this extension remains standalone.
- */
 const NIGHT_OWL_DIFF_BACKGROUND = {
-  added: "\x1b[48;2;26;54;42m", // #1a362a
-  removed: "\x1b[48;2;61;31;45m", // #3d1f2d
+  added: "\x1b[48;2;26;54;42m",
+  removed: "\x1b[48;2;61;31;45m",
   reset: "\x1b[49m",
 } as const;
 
@@ -805,7 +757,6 @@ function parseRow(line: string): ParsedRow | undefined {
   };
 }
 
-/** Render generateDiffString output using only the active Pi theme. */
 function renderDiffColored(
   theme: Theme,
   diff: string,
@@ -814,7 +765,6 @@ function renderDiffColored(
   const language = getLanguageFromPath(filePath);
   const paintCode = (content: string): string => {
     if (!language || !content.trim()) return theme.fg("text", content);
-    // Current Pi derives the active syntax theme internally.
     return highlightCode(content, language).join("");
   };
 
@@ -840,10 +790,6 @@ function renderDiffColored(
   });
 }
 
-/**
- * One-char-wide vertical scrollbar: thumb "┃" over track "│".
- * Blank column when everything fits — the gutter width stays stable.
- */
 function diffScrollbar(
   total: number,
   visible: number,
@@ -875,9 +821,7 @@ function paintStatus(theme: Theme, status: string): string {
   return theme.fg(statusColor(status), letter.padEnd(1));
 }
 
-// ── Diff viewer ─────────────────────────────────────────────────────────────
 
-/** Max wrapped body lines in the commit header (keeps diff room). */
 const COMMIT_BODY_MAX_LINES = 5;
 
 type Pane = "files" | "diff";
@@ -894,10 +838,6 @@ type GitViewerOptions = {
   done: () => void;
 };
 
-/**
- * Dual-pane git viewer: file list on the left, coloured diff on the right.
- * Narrow terminals drop the split and show one pane at a time.
- */
 class GitViewer implements Component {
   private readonly tui: TUI;
   private readonly theme: Theme;
@@ -906,7 +846,6 @@ class GitViewer implements Component {
   private readonly root: string;
   private readonly scope: GitScope;
   private files: ChangedFile[];
-  /** Flattened tree rows for the file pane (dirs + files). */
   private treeRows: FileTreeRow[] = [];
   private readonly commit: CommitInfo | undefined;
   private readonly done: () => void;
@@ -921,13 +860,10 @@ class GitViewer implements Component {
   private refreshing = false;
   private loadToken = 0;
   private cache = new Map<string, FileDiff>();
-  /** Coloured diff lines per path — hljs is too slow to redo on every j/k. */
   private renderedCache = new Map<string, ColoredDiffLine[]>();
   private cachedWidth?: number;
   private cachedRows?: number;
   private cachedLines?: string[];
-  /** Final truncated+padded+tinted diff rows by absolute line index — ANSI-dense
-   * rows are expensive to re-measure, so scrolling must reuse them. */
   private rowCache = new Map<number, string>();
   private rowCacheWidth = -1;
   private bodyHeight = 10;
@@ -949,7 +885,6 @@ class GitViewer implements Component {
     if (this.files.length > 0) void this.loadSelected(true);
   }
 
-  /** Clear only frame/layout caches after interaction. */
   private invalidateRender(): void {
     this.cachedWidth = undefined;
     this.cachedRows = undefined;
@@ -958,14 +893,11 @@ class GitViewer implements Component {
     this.rowCacheWidth = -1;
   }
 
-  /** TUI invalidation may mean the theme changed, so rebuild coloured rows. */
   invalidate(): void {
     this.invalidateRender();
     this.renderedCache.clear();
     const file = this.files[this.fileIndex];
     const cached = file ? this.cache.get(file.path) : undefined;
-    // Preserve the user's position. Resetting here makes every redraw undo
-    // j/k and arrow-key scrolling.
     if (file && cached) this.applyDiff(cached, file.path, false);
   }
 
@@ -982,13 +914,11 @@ class GitViewer implements Component {
       kb.matches(data, "tui.select.cancel") ||
       matchesKey(data, Key.ctrl("c"))
     ) {
-      // Leave the viewer entirely — parent GitApp pops back to commits/menu.
       this.dispose();
       this.done();
       return;
     }
 
-    // Global actions (work from either pane).
     if (data === "y") {
       void this.copySelectedPath();
       return;
@@ -1008,7 +938,6 @@ class GitViewer implements Component {
       return;
     }
 
-    // Left/right always move between panes when split; in stacked mode they page the active pane.
     if (this.split && (matchesKey(data, Key.left) || data === "h")) {
       this.pane = "files";
       this.redraw();
@@ -1040,13 +969,9 @@ class GitViewer implements Component {
 
     if (rows <= 2) return [truncateToWidth(this.titleLine(width), width)];
 
-    // frame() adds 2 border lines. Never impose a minimum taller than the
-    // terminal: fullscreen clips excess rows and would hide the footer.
     const maxHeight = Math.max(1, Math.min(rows - 2, Math.floor(rows * 0.92)));
     this.split = width >= 100;
 
-    // frame() adds one border column per side — build content at the inner
-    // width so rows never need a lossy re-truncation pass per frame.
     const innerWidth = Math.max(1, width - 2);
     const allCommitHeader = this.commit
       ? this.commitHeaderLines(innerWidth)
@@ -1064,21 +989,16 @@ class GitViewer implements Component {
       return this.frame(compact, width);
     }
 
-    // title + file meta + commit header + top/bottom rules + footer
     const chrome = 2 + commitHeader.length + 3;
     this.bodyHeight = Math.max(0, maxHeight - chrome);
 
-    // frame() concatenates borders without measuring, so every row pushed
-    // here must be exactly innerWidth columns (panes emit exact widths).
     const lines: string[] = [];
     lines.push(padTo(this.titleLine(innerWidth), innerWidth));
-    // Commit message first (when present), then the selected file row.
     for (const line of commitHeader) lines.push(padTo(line, innerWidth));
     lines.push(padTo(this.metaLine(innerWidth), innerWidth));
     lines.push(this.theme.fg("borderMuted", "─".repeat(innerWidth)));
 
     if (this.bodyHeight === 0) {
-      // Tiny terminals still retain title, metadata, and controls.
     } else if (this.files.length === 0) {
       lines.push(
         padTo(this.theme.fg("warning", "  No changed files."), innerWidth),
@@ -1189,7 +1109,6 @@ class GitViewer implements Component {
       this.redraw();
       return;
     }
-    // [ ] jump files while focused on diff
     if (data === "[" || data === "p") {
       this.moveFile(-1);
       return;
@@ -1211,7 +1130,6 @@ class GitViewer implements Component {
     void this.loadSelected();
   }
 
-  /** Content rows inside a framed pane (top+bottom border). */
   private paneInnerHeight(): number {
     return Math.max(1, this.bodyHeight - 2);
   }
@@ -1250,7 +1168,6 @@ class GitViewer implements Component {
 
     const cached = this.cache.get(file.path);
     if (cached) {
-      // Invalidate any in-flight uncached load so it can't clobber this selection.
       this.loadToken += 1;
       this.loading = false;
       this.applyDiff(cached, file.path);
@@ -1275,7 +1192,6 @@ class GitViewer implements Component {
     void this.prefetchNeighbors();
   }
 
-  /** Warm the cache for prev/next so j/k feels instant on big files. */
   private async prefetchNeighbors(): Promise<void> {
     const token = this.loadToken;
     const indices = [this.fileIndex - 1, this.fileIndex + 1];
@@ -1285,7 +1201,6 @@ class GitViewer implements Component {
       const result = await loadFileDiff(this.git, this.scope, file, {
         root: this.root,
       });
-      // refresh()/dispose() bumped the token — this result predates the current caches.
       if (token !== this.loadToken) return;
       if (!this.cache.has(file.path)) this.cache.set(file.path, result);
       if (result.kind === "text" && !this.renderedCache.has(file.path)) {
@@ -1311,7 +1226,6 @@ class GitViewer implements Component {
         colored = renderDiffColored(this.theme, result.diff, filePath);
         this.renderedCache.set(filePath, colored);
       }
-      // Copy — the truncation notice below must not leak into the cache.
       const lines = [...colored];
       if (result.truncated) {
         lines.push({
@@ -1322,8 +1236,6 @@ class GitViewer implements Component {
         });
       }
       this.diffLines = lines;
-      // Land on the first hunk — firstChangeIndex is against the uncoloured
-      // lines, which renderDiffColored keeps 1:1 with (no header injection).
       const listHeight = this.paneInnerHeight();
       const maxScroll = Math.max(0, this.diffLines.length - listHeight);
       const target = resetScroll
@@ -1412,7 +1324,6 @@ class GitViewer implements Component {
   private async copyCommitSha(): Promise<void> {
     const sha = this.commit?.sha;
     if (!sha) {
-      // Fall back to relative path when there's no commit context.
       const file = this.files[this.fileIndex];
       if (!file) {
         this.showFlash("no sha to copy");
@@ -1450,7 +1361,6 @@ class GitViewer implements Component {
   }
 
   private titleLine(width: number): string {
-    // Commit subject lives in commitHeaderLines — keep this line short.
     const label = this.commit ? this.commit.shortSha : scopeLabel(this.scope);
     const count = `${this.files.length} file${this.files.length === 1 ? "" : "s"}`;
     const text = ` Git · ${label} · ${count} `;
@@ -1480,12 +1390,6 @@ class GitViewer implements Component {
     return truncateToWidth(line, width);
   }
 
-  /**
-   * Multi-line commit header:
-   *   author · relative date
-   *   subject
-   *   wrapped body (capped)
-   */
   private commitHeaderLines(width: number): string[] {
     const c = this.commit!;
     const lines: string[] = [];
@@ -1496,7 +1400,6 @@ class GitViewer implements Component {
       this.theme.fg("dim", c.date);
     lines.push(truncateToWidth(meta, width));
 
-    // Subject may wrap once on narrow panes.
     const subject = wrapTextWithAnsi(c.title, width).slice(0, 2);
     for (const line of subject) {
       lines.push(this.theme.fg("text", this.theme.bold(line)));
@@ -1544,7 +1447,6 @@ class GitViewer implements Component {
       tail += ` · lines ${start}-${end}/${this.diffLines.length}`;
     }
 
-    // Position info wins on narrow widths — key hints shrink first.
     const budget = width - visibleWidth(chips) - visibleWidth(tail);
     const hintTiers = [
       ` · tab pane · ${keyHint("tui.select.up", "up")}/${keyHint("tui.select.down", "down")}/jk · ←→/hl · [/] file · y path · Y sha · r refresh · ${keyHint("tui.select.cancel", "back")}`,
@@ -1556,7 +1458,6 @@ class GitViewer implements Component {
     return truncateToWidth(chips + this.theme.fg("dim", hints + tail), width);
   }
 
-  /** Active tab gets a colored bracket outline. */
   private tabChip(label: string, active: boolean): string {
     if (active) {
       return (
@@ -1575,7 +1476,6 @@ class GitViewer implements Component {
     const left = this.renderFilePane(leftWidth, height, this.pane === "files");
     const right = this.renderDiffPane(rightWidth, height, this.pane === "diff");
 
-    // framePane emits exact-width lines — plain concat keeps scrolling cheap.
     const lines: string[] = [];
     for (let i = 0; i < height; i += 1) {
       const l = left[i] ?? " ".repeat(leftWidth);
@@ -1632,7 +1532,6 @@ class GitViewer implements Component {
     );
 
     const file = this.files[this.fileIndex];
-    // Basename in the header keeps the pane self-describing in stacked mode.
     const name = file
       ? this.theme.fg(
           "dim",
@@ -1649,7 +1548,6 @@ class GitViewer implements Component {
           ? this.theme.fg("dim", " …")
           : "";
 
-    // Cache fitted ANSI rows so scrolling does not repeatedly measure syntax output.
     if (this.rowCacheWidth !== innerW) {
       this.rowCache.clear();
       this.rowCacheWidth = innerW;
@@ -1671,7 +1569,6 @@ class GitViewer implements Component {
       }
       body.push(row);
     }
-    // Scrollbar lives in the border column — content width stays untouched.
     const scrollbar =
       this.diffLines.length > listHeight
         ? diffScrollbar(
@@ -1693,10 +1590,6 @@ class GitViewer implements Component {
     );
   }
 
-  /**
-   * Box around a pane. Active pane uses borderAccent outline + accent title;
-   * inactive stays muted so focus is obvious at a glance.
-   */
   private framePane(
     width: number,
     height: number,
@@ -1721,7 +1614,6 @@ class GitViewer implements Component {
 
     const lines: string[] = [truncateToWidth(top, width)];
     for (let i = 0; i < innerH; i += 1) {
-      // prePadded rows are exactly innerW wide — skip the ANSI re-measure.
       const row = prePadded
         ? (body[i] ?? " ".repeat(innerW))
         : padVisible(body[i] ?? "", innerW);
@@ -1734,9 +1626,6 @@ class GitViewer implements Component {
   }
 
   private frame(lines: string[], width: number): string[] {
-    // render() guarantees every row is exactly innerWidth wide, so borders
-    // concatenate without measuring — the old per-row truncation both cost a
-    // full ANSI walk and chopped 2 columns off full-width rows.
     const innerWidth = Math.max(1, width - 2);
     const color = (text: string) => this.theme.fg("borderMuted", text);
     const top = color(`┌${"─".repeat(innerWidth)}┐`);
@@ -1755,13 +1644,11 @@ function padVisible(text: string, width: number): string {
   return truncated + " ".repeat(pad);
 }
 
-/** Fit and pad a line to an exact visible width. */
 function padTo(text: string, width: number): string {
   const fitted = truncateToWidth(text, width, "");
   return fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted)));
 }
 
-// ── Application state ───────────────────────────────────────────────────────
 
 type GitStart = { kind: "menu" } | { kind: "uncommitted" } | { kind: "commit" };
 
@@ -1773,14 +1660,8 @@ type CommitRow = {
   date: string;
 };
 
-/** Cap so wide single panes don't stretch meta to the far right edge. */
 const COMMIT_ROW_MAX_WIDTH = 100;
 
-/**
- * Fit `sha  title  date · author` into maxWidth.
- * Meta reserved on the right within a capped row; title absorbs squeeze.
- * Narrow panes drop date before author; last resort is sha+title.
- */
 function formatCommitRow(commit: CommitRow, maxWidth: number): string {
   const width = Math.min(maxWidth, COMMIT_ROW_MAX_WIDTH);
   const left = `${commit.shortSha}  `;
@@ -1790,7 +1671,7 @@ function formatCommitRow(commit: CommitRow, maxWidth: number): string {
   const titleBudgetFloor = 10;
   const fullMeta = `${commit.date} · ${commit.author}`;
   const authorOnly = commit.author;
-  const sepW = 2; // gap before right-aligned meta
+  const sepW = 2;
 
   const pack = (titleBudget: number, meta: string): string => {
     const title = truncateToWidth(commit.title, Math.max(0, titleBudget), "…");
@@ -1810,15 +1691,6 @@ function formatCommitRow(commit: CommitRow, maxWidth: number): string {
   return truncateToWidth(left + commit.title, width, "…");
 }
 
-/**
- * One `ctx.ui.custom` session owns the whole /git flow.
- *
- * Chaining separate custom() calls (menu → commits → overlay viewer → commits)
- * was dropping the user back to the editor on esc. A single component with an
- * explicit stack makes esc always mean "pop one screen".
- *
- *   viewer → commits → menu → editor
- */
 class GitApp implements Component, Focusable {
   private readonly tui: TUI;
   private readonly theme: Theme;
@@ -1827,11 +1699,9 @@ class GitApp implements Component, Focusable {
   private readonly cwd: string;
   private readonly exit: () => void;
 
-  /** Screen stack. Empty ⇒ leave /git. */
   private stack: Screen[] = [];
   private root?: string;
 
-  /** Cached so returning to commit history does not flash a loader. */
   private commits: CommitRow[] = [];
   private commitsLoaded = false;
 
@@ -1885,7 +1755,6 @@ class GitApp implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.closed) return;
-    // Viewer owns its keys (including esc → pop).
     if (this.viewer) {
       this.viewer.handleInput(data);
       return;
@@ -1922,14 +1791,12 @@ class GitApp implements Component, Focusable {
     }
   }
 
-  /** Push a list/menu screen and paint it. */
   private push(screen: Screen): void {
     this.teardownViewer();
     this.stack.push(screen);
     this.paint(screen);
   }
 
-  /** Replace the top screen (used after async loads finish). */
   private replaceTop(screen: Screen): void {
     this.teardownViewer();
     if (this.stack.length === 0) this.stack.push(screen);
@@ -1959,7 +1826,6 @@ class GitApp implements Component, Focusable {
   private failAndExit(message: string): void {
     this.teardownViewer();
     this.stack = [];
-    // esc leaves /git entirely here — the stack is gone, there is no "back".
     const body = this.messageScreen(
       " Git",
       message,
@@ -1992,7 +1858,6 @@ class GitApp implements Component, Focusable {
         this.content = this.messageScreen(" Git", screen.text, screen.level);
         break;
       case "viewer":
-        // Viewer is mounted separately via openViewer.
         break;
     }
     this.focusContent();
@@ -2001,7 +1866,6 @@ class GitApp implements Component, Focusable {
 
   private showLoading(label: string): void {
     this.teardownViewer();
-    // Loading is transient — do not push onto the stack.
     this.content = this.messageScreen(" Git", label, "dim");
     this.focusContent();
     this.tui.requestRender();
@@ -2053,7 +1917,6 @@ class GitApp implements Component, Focusable {
     else this.close();
   }
 
-  // ── Menu ──────────────────────────────────────────────────────────
 
   private buildMenu(): Component {
     const items: SelectItem[] = [
@@ -2092,7 +1955,6 @@ class GitApp implements Component, Focusable {
     }
   }
 
-  // ── Commits ───────────────────────────────────────────────────────
 
   private async openCommits(selected?: string): Promise<void> {
     if (!this.commitsLoaded) {
@@ -2120,8 +1982,6 @@ class GitApp implements Component, Focusable {
       return;
     }
 
-    // If we already have a commits frame on the stack (returning from viewer),
-    // replace it so we don't stack commits on commits.
     const top = this.stack[this.stack.length - 1];
     if (top?.type === "commits") {
       this.replaceTop({ type: "commits", selected: selected ?? top.selected });
@@ -2134,7 +1994,6 @@ class GitApp implements Component, Focusable {
     const bySha = new Map(this.commits.map((commit) => [commit.sha, commit]));
     const items: SelectItem[] = this.commits.map((commit) => ({
       value: commit.sha,
-      // Full text for filter; display goes through truncatePrimary.
       label: `${commit.shortSha}  ${commit.title}  ${commit.date} · ${commit.author}`,
     }));
     return this.buildList({
@@ -2144,8 +2003,6 @@ class GitApp implements Component, Focusable {
       hint: `Type to filter · ${keyHint("tui.select.confirm", "open")} · ${keyHint("tui.select.cancel", "back")}`,
       filter: true,
       maxRows: 14,
-      // No description column — it steals/starves on narrow splits.
-      // One primary line, width-aware: title flexes, author kept.
       layout: {
         minPrimaryColumnWidth: 20,
         maxPrimaryColumnWidth: COMMIT_ROW_MAX_WIDTH,
@@ -2160,7 +2017,6 @@ class GitApp implements Component, Focusable {
       onSelect: (sha) => {
         const commit = this.commits.find((entry) => entry.sha === sha);
         if (!commit) return;
-        // Remember selection on the commits frame under the viewer.
         const top = this.stack[this.stack.length - 1];
         if (top?.type === "commits") top.selected = sha;
         void this.openViewer({
@@ -2173,7 +2029,6 @@ class GitApp implements Component, Focusable {
     });
   }
 
-  // ── Viewer ────────────────────────────────────────────────────────
 
   private async openViewer(scope: GitScope): Promise<void> {
     this.showLoading(`Loading ${scopeLabel(scope)}…`);
@@ -2188,7 +2043,6 @@ class GitApp implements Component, Focusable {
       if (this.closed) return;
 
       if (files.length === 0 && scope.kind !== "commit") {
-        // Stay on previous list/menu; show a transient message frame.
         this.push({
           type: "message",
           text: `No changes · ${scopeLabel(scope)}`,
@@ -2221,7 +2075,6 @@ class GitApp implements Component, Focusable {
     this.viewer = undefined;
   }
 
-  // ── Shared list builder ───────────────────────────────────────────
 
   private buildList(options: {
     title: string;
@@ -2344,22 +2197,7 @@ type Screen =
   | { type: "loading"; label: string }
   | { type: "message"; text: string; level: "error" | "warning" | "text" };
 
-// ── Extension registration ──────────────────────────────────────────────────
 
-/**
- * In-TUI git for the simple loop:
- *   edit → uncommitted diffs → commit (outside) → history
- *
- * `/git` · shortcut `ctrl+shift+g`
- *
- * Menu:
- *   Uncommitted changes · Commit history
- *
- * Args:
- *   (none)                menu
- *   uncommitted|u|all     local diff (HEAD vs worktree)
- *   commit|c|log|history  commit picker
- */
 
 function usage(): string {
   return [

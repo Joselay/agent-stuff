@@ -1,32 +1,3 @@
-/**
- * Code Review Extension (inspired by Codex's review feature)
- *
- * Provides a `/review` command that prompts the agent to review code changes.
- * Supports multiple review modes:
- * - Review a GitHub pull request (checks out the PR locally)
- * - Review against a base branch (PR style)
- * - Review uncommitted changes
- * - Review a specific commit
- * - Shared custom review instructions (applied to all review modes when configured)
- *
- * Usage:
- * - `/review` - show interactive selector
- * - `/review pr 123` - review PR #123 (checks out locally)
- * - `/review pr https://github.com/owner/repo/pull/123` - review PR from URL
- * - `/review uncommitted` - review uncommitted changes directly
- * - `/review branch main` - review against main branch
- * - `/review commit abc123` - review specific commit
- * - `/review folder src docs` - review specific folders/files (snapshot, not diff)
- * - `/review` selector includes Add/Remove custom review instructions (applies to all modes)
- * - `/review --extra "focus on performance regressions"` - add extra review instruction (works with any mode)
- *
- * Project-specific review guidelines:
- * - If a REVIEW_GUIDELINES.md file exists in the same directory as .pi,
- *   its contents are appended to the review prompt.
- *
- * Note: PR review requires a clean working tree (no uncommitted changes to tracked files).
- */
-
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, BorderedLoader } from "@earendil-works/pi-coding-agent";
 import {
@@ -41,9 +12,6 @@ import {
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
-// State to track fresh session review (where we branched from).
-// Module-level state means only one review can be active at a time.
-// This is intentional - the UI and /end-review command assume a single active review.
 let reviewOriginId: string | undefined = undefined;
 let endReviewInProgress = false;
 let reviewLoopFixingEnabled = false;
@@ -252,8 +220,6 @@ function isNeedsAttentionVerdictValue(value: string): boolean {
 		return false;
 	}
 
-	// Reject rubric/choice phrasing like "correct or needs attention", but
-	// keep legitimate verdict text that may contain unrelated "or".
 	if (/\bcorrect\b/.test(normalized) && /\bor\b/.test(normalized)) {
 		return false;
 	}
@@ -350,7 +316,6 @@ function hasBlockingReviewFindings(messageText: string): boolean {
 	return hasNeedsAttentionVerdict(messageText);
 }
 
-// Review target types (matching Codex's approach)
 type ReviewTarget =
 	| { type: "uncommitted" }
 	| { type: "baseBranch"; branch: string }
@@ -358,7 +323,6 @@ type ReviewTarget =
 	| { type: "pullRequest"; prNumber: number; baseBranch: string; title: string }
 	| { type: "folder"; paths: string[] };
 
-// Prompts (adapted from Codex)
 const UNCOMMITTED_PROMPT =
 	"Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
 
@@ -385,7 +349,6 @@ const PULL_REQUEST_PROMPT_FALLBACK =
 const FOLDER_REVIEW_PROMPT =
 	"Review the code in the following paths: {paths}. This is a snapshot review (not a diff). Read the files directly in these paths and provide prioritized, actionable findings.";
 
-// The detailed review rubric (adapted from Codex's review_prompt.md)
 const REVIEW_RUBRIC = `# Review Guidelines
 
 You are acting as a code reviewer for a proposed code change made by another engineer.
@@ -519,15 +482,11 @@ async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> 
 	}
 }
 
-/**
- * Get the merge base between HEAD and a branch
- */
 async function getMergeBase(
 	pi: ExtensionAPI,
 	branch: string,
 ): Promise<string | null> {
 	try {
-		// First try to get the upstream tracking branch
 		const { stdout: upstream, code: upstreamCode } = await pi.exec("git", [
 			"rev-parse",
 			"--abbrev-ref",
@@ -541,7 +500,6 @@ async function getMergeBase(
 			}
 		}
 
-		// Fall back to using the branch directly
 		const { stdout: mergeBase, code } = await pi.exec("git", ["merge-base", "HEAD", branch]);
 		if (code === 0 && mergeBase.trim()) {
 			return mergeBase.trim();
@@ -553,9 +511,6 @@ async function getMergeBase(
 	}
 }
 
-/**
- * Get list of local branches
- */
 async function getLocalBranches(pi: ExtensionAPI): Promise<string[]> {
 	const { stdout, code } = await pi.exec("git", ["branch", "--format=%(refname:short)"]);
 	if (code !== 0) return [];
@@ -565,9 +520,6 @@ async function getLocalBranches(pi: ExtensionAPI): Promise<string[]> {
 		.filter((b) => b.trim());
 }
 
-/**
- * Get list of recent commits
- */
 async function getRecentCommits(pi: ExtensionAPI, limit: number = 10): Promise<Array<{ sha: string; title: string }>> {
 	const { stdout, code } = await pi.exec("git", ["log", `--oneline`, `-n`, `${limit}`]);
 	if (code !== 0) return [];
@@ -582,44 +534,28 @@ async function getRecentCommits(pi: ExtensionAPI, limit: number = 10): Promise<A
 		});
 }
 
-/**
- * Check if there are uncommitted changes (staged, unstaged, or untracked)
- */
 async function hasUncommittedChanges(pi: ExtensionAPI): Promise<boolean> {
 	const { stdout, code } = await pi.exec("git", ["status", "--porcelain"]);
 	return code === 0 && stdout.trim().length > 0;
 }
 
-/**
- * Check if there are changes that would prevent switching branches
- * (staged or unstaged changes to tracked files - untracked files are fine)
- */
 async function hasPendingChanges(pi: ExtensionAPI): Promise<boolean> {
-	// Check for staged or unstaged changes to tracked files
 	const { stdout, code } = await pi.exec("git", ["status", "--porcelain"]);
 	if (code !== 0) return false;
 
-	// Filter out untracked files (lines starting with ??)
 	const lines = stdout.trim().split("\n").filter((line) => line.trim());
 	const trackedChanges = lines.filter((line) => !line.startsWith("??"));
 	return trackedChanges.length > 0;
 }
 
-/**
- * Parse a PR reference (URL or number) and return the PR number
- */
 function parsePrReference(ref: string): number | null {
 	const trimmed = ref.trim();
 
-	// Try as a number first
 	const num = parseInt(trimmed, 10);
 	if (!isNaN(num) && num > 0) {
 		return num;
 	}
 
-	// Try to extract from GitHub URL
-	// Formats: https://github.com/owner/repo/pull/123
-	//          github.com/owner/repo/pull/123
 	const urlMatch = trimmed.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/);
 	if (urlMatch) {
 		return parseInt(urlMatch[1], 10);
@@ -628,9 +564,6 @@ function parsePrReference(ref: string): number | null {
 	return null;
 }
 
-/**
- * Get PR information from GitHub CLI
- */
 async function getPrInfo(pi: ExtensionAPI, prNumber: number): Promise<{ baseBranch: string; title: string; headBranch: string } | null> {
 	const { stdout, code } = await pi.exec("gh", [
 		"pr", "view", String(prNumber),
@@ -651,9 +584,6 @@ async function getPrInfo(pi: ExtensionAPI, prNumber: number): Promise<{ baseBran
 	}
 }
 
-/**
- * Checkout a PR using GitHub CLI
- */
 async function checkoutPr(pi: ExtensionAPI, prNumber: number): Promise<{ success: boolean; error?: string }> {
 	const { stdout, stderr, code } = await pi.exec("gh", ["pr", "checkout", String(prNumber)]);
 
@@ -664,9 +594,6 @@ async function checkoutPr(pi: ExtensionAPI, prNumber: number): Promise<{ success
 	return { success: true };
 }
 
-/**
- * Get the current branch name
- */
 async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
 	const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
 	if (code === 0 && stdout.trim()) {
@@ -675,27 +602,19 @@ async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
 	return null;
 }
 
-/**
- * Get the default branch (main or master)
- */
 async function getDefaultBranch(pi: ExtensionAPI): Promise<string> {
-	// Try to get from remote HEAD
 	const { stdout, code } = await pi.exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]);
 	if (code === 0 && stdout.trim()) {
 		return stdout.trim().replace("origin/", "");
 	}
 
-	// Fall back to checking if main or master exists
 	const branches = await getLocalBranches(pi);
 	if (branches.includes("main")) return "main";
 	if (branches.includes("master")) return "master";
 
-	return "main"; // Default fallback
+	return "main";
 }
 
-/**
- * Build the review prompt based on target
- */
 async function buildReviewPrompt(
 	pi: ExtensionAPI,
 	target: ReviewTarget,
@@ -741,9 +660,6 @@ async function buildReviewPrompt(
 	}
 }
 
-/**
- * Get user-facing hint for the review target
- */
 function getUserFacingHint(target: ReviewTarget): string {
 	switch (target.type) {
 		case "uncommitted":
@@ -828,7 +744,6 @@ async function waitForLoopTurnToStart(ctx: ExtensionContext, previousAssistantId
 	return false;
 }
 
-// Review preset options for the selector (keep this order stable)
 const REVIEW_PRESETS = [
 	{ value: "uncommitted", label: "Review uncommitted changes", description: "" },
 	{ value: "baseBranch", label: "Review against a base branch", description: "(local)" },
@@ -875,31 +790,21 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		applyAllReviewState(ctx);
 	});
 
-	/**
-	 * Determine the smart default review type based on git state
-	 */
 	async function getSmartDefault(): Promise<"uncommitted" | "baseBranch" | "commit"> {
-		// Priority 1: If there are uncommitted changes, default to reviewing them
 		if (await hasUncommittedChanges(pi)) {
 			return "uncommitted";
 		}
 
-		// Priority 2: If on a feature branch (not the default branch), default to PR-style review
 		const currentBranch = await getCurrentBranch(pi);
 		const defaultBranch = await getDefaultBranch(pi);
 		if (currentBranch && currentBranch !== defaultBranch) {
 			return "baseBranch";
 		}
 
-		// Priority 3: Default to reviewing a specific commit
 		return "commit";
 	}
 
-	/**
-	 * Show the review preset selector
-	 */
 	async function showReviewSelector(ctx: ExtensionContext): Promise<ReviewTarget | null> {
-		// Determine smart default (but keep the list order stable)
 		const smartDefault = await getSmartDefault();
 		const presetItems: SelectItem[] = REVIEW_PRESETS.map((preset) => ({
 			value: preset.value,
@@ -940,7 +845,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 					noMatch: (text) => theme.fg("warning", text),
 				});
 
-				// Preselect the smart default without reordering the list
 				if (smartDefaultIndex >= 0) {
 					selectList.setSelectedIndex(smartDefaultIndex);
 				}
@@ -997,7 +901,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				continue;
 			}
 
-			// Handle each preset type
 			switch (result) {
 				case "uncommitted":
 					return { type: "uncommitted" };
@@ -1036,15 +939,11 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	/**
-	 * Show branch selector for base branch review
-	 */
 	async function showBranchSelector(ctx: ExtensionContext): Promise<ReviewTarget | null> {
 		const branches = await getLocalBranches(pi);
 		const currentBranch = await getCurrentBranch(pi);
 		const defaultBranch = await getDefaultBranch(pi);
 
-		// Never offer the current branch as a base branch (reviewing against itself is meaningless).
 		const candidateBranches = currentBranch ? branches.filter((b) => b !== currentBranch) : branches;
 
 		if (candidateBranches.length === 0) {
@@ -1055,7 +954,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			return null;
 		}
 
-		// Sort branches with default branch first
 		const sortedBranches = candidateBranches.sort((a, b) => {
 			if (a === defaultBranch) return -1;
 			if (b === defaultBranch) return 1;
@@ -1150,9 +1048,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		return { type: "baseBranch", branch: result };
 	}
 
-	/**
-	 * Show commit selector
-	 */
 	async function showCommitSelector(ctx: ExtensionContext): Promise<ReviewTarget | null> {
 		const commits = await getRecentCommits(pi, 20);
 
@@ -1264,9 +1159,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			.filter((item) => item.length > 0);
 	}
 
-	/**
-	 * Show folder input
-	 */
 	async function showFolderInput(ctx: ExtensionContext): Promise<ReviewTarget | null> {
 		const result = await ctx.ui.editor(
 			"Enter folders/files to review (space-separated or one per line):",
@@ -1280,17 +1172,12 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		return { type: "folder", paths };
 	}
 
-	/**
-	 * Show PR input and handle checkout
-	 */
 	async function showPrInput(ctx: ExtensionContext): Promise<ReviewTarget | null> {
-		// First check for pending changes that would prevent branch switching
 		if (await hasPendingChanges(pi)) {
 			ctx.ui.notify("Cannot checkout PR: you have uncommitted changes. Please commit or stash them first.", "error");
 			return null;
 		}
 
-		// Get PR reference from user
 		const prRef = await ctx.ui.editor(
 			"Enter PR number or URL (e.g. 123 or https://github.com/owner/repo/pull/123):",
 			"",
@@ -1304,7 +1191,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			return null;
 		}
 
-		// Get PR info from GitHub
 		ctx.ui.notify(`Fetching PR #${prNumber} info...`, "info");
 		const prInfo = await getPrInfo(pi, prNumber);
 
@@ -1313,13 +1199,11 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			return null;
 		}
 
-		// Check again for pending changes (in case something changed)
 		if (await hasPendingChanges(pi)) {
 			ctx.ui.notify("Cannot checkout PR: you have uncommitted changes. Please commit or stash them first.", "error");
 			return null;
 		}
 
-		// Checkout the PR
 		ctx.ui.notify(`Checking out PR #${prNumber}...`, "info");
 		const checkoutResult = await checkoutPr(pi, prNumber);
 
@@ -1338,25 +1222,18 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		};
 	}
 
-	/**
-	 * Execute the review
-	 */
 	async function executeReview(
 		ctx: ExtensionCommandContext,
 		target: ReviewTarget,
 		useFreshSession: boolean,
 		options?: { includeLocalChanges?: boolean; extraInstruction?: string },
 	): Promise<boolean> {
-		// Check if we're already in a review
 		if (reviewOriginId) {
 			ctx.ui.notify("Already in a review. Use /end-review to finish first.", "warning");
 			return false;
 		}
 
-		// Handle fresh session mode
 		if (useFreshSession) {
-			// Store current position (where we'll return to).
-			// In an empty session there is no leaf yet, so create a lightweight anchor first.
 			let originId = ctx.sessionManager.getLeafId() ?? undefined;
 			if (!originId) {
 				pi.appendEntry(REVIEW_ANCHOR_TYPE, { createdAt: new Date().toISOString() });
@@ -1368,19 +1245,14 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			}
 			reviewOriginId = originId;
 
-			// Keep a local copy so session_tree events during navigation don't wipe it
 			const lockedOriginId = originId;
 
-			// Find the first user message in the session.
-			// If none exists (e.g. brand-new session), we'll stay on the current leaf.
 			const entries = ctx.sessionManager.getEntries();
 			const firstUserMessage = entries.find(
 				(e) => e.type === "message" && e.message.role === "user",
 			);
 
 			if (firstUserMessage) {
-				// Navigate to first user message to create a new branch from that point
-				// Label it as "code-review" so it's visible in the tree
 				try {
 					const result = await ctx.navigateTree(firstUserMessage.id, { summarize: false, label: "code-review" });
 					if (result.cancelled) {
@@ -1388,23 +1260,18 @@ export default function reviewExtension(pi: ExtensionAPI) {
 						return false;
 					}
 				} catch (error) {
-					// Clean up state if navigation fails
 					reviewOriginId = undefined;
 					ctx.ui.notify(`Failed to start review: ${error instanceof Error ? error.message : String(error)}`, "error");
 					return false;
 				}
 
-				// Clear the editor (navigating to user message fills it with the message text)
 				ctx.ui.setEditorText("");
 			}
 
-			// Restore origin after navigation events (session_tree can reset it)
 			reviewOriginId = lockedOriginId;
 
-			// Show widget indicating review is active
 			setReviewWidget(ctx, true);
 
-			// Persist review state so tree navigation can restore/reset it
 			pi.appendEntry(REVIEW_STATE_TYPE, { active: true, originId: lockedOriginId });
 		}
 
@@ -1414,7 +1281,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		const hint = getUserFacingHint(target);
 		const projectGuidelines = await loadProjectReviewGuidelines(ctx.cwd);
 
-		// Combine the review rubric with the specific prompt
 		let fullPrompt = `${REVIEW_RUBRIC}\n\n---\n\nPlease perform a code review with the following focus:\n\n${prompt}`;
 
 		if (reviewCustomInstructions) {
@@ -1432,15 +1298,10 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		const modeHint = useFreshSession ? " (fresh session)" : "";
 		ctx.ui.notify(`Starting review: ${hint}${modeHint}`, "info");
 
-		// Send as a user message that triggers a turn
 		pi.sendUserMessage(fullPrompt);
 		return true;
 	}
 
-	/**
-	 * Parse command arguments for direct invocation
-	 * Returns the target or a special marker for PR that needs async handling
-	 */
 	type ParsedReviewArgs = {
 		target: ReviewTarget | { type: "pr"; ref: string } | null;
 		extraInstruction?: string;
@@ -1560,11 +1421,7 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	/**
-	 * Handle PR checkout and return a ReviewTarget (or null on failure)
-	 */
 	async function handlePrCheckout(ctx: ExtensionContext, ref: string): Promise<ReviewTarget | null> {
-		// First check for pending changes
 		if (await hasPendingChanges(pi)) {
 			ctx.ui.notify("Cannot checkout PR: you have uncommitted changes. Please commit or stash them first.", "error");
 			return null;
@@ -1576,7 +1433,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			return null;
 		}
 
-		// Get PR info
 		ctx.ui.notify(`Fetching PR #${prNumber} info...`, "info");
 		const prInfo = await getPrInfo(pi, prNumber);
 
@@ -1585,7 +1441,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			return null;
 		}
 
-		// Checkout the PR
 		ctx.ui.notify(`Checking out PR #${prNumber}...`, "info");
 		const checkoutResult = await checkoutPr(pi, prNumber);
 
@@ -1731,7 +1586,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	// Register the /review command
 	pi.registerCommand("review", {
 		description: "Review code changes (PR, uncommitted, branch, commit, or folder)",
 		handler: async (args, ctx) => {
@@ -1745,20 +1599,17 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			// Check if we're already in a review
 			if (reviewOriginId) {
 				ctx.ui.notify("Already in a review. Use /end-review to finish first.", "warning");
 				return;
 			}
 
-			// Check if we're in a git repository
 			const { code } = await pi.exec("git", ["rev-parse", "--git-dir"]);
 			if (code !== 0) {
 				ctx.ui.notify("Not a git repository", "error");
 				return;
 			}
 
-			// Try to parse direct arguments
 			let target: ReviewTarget | null = null;
 			let fromSelector = false;
 			let extraInstruction: string | undefined;
@@ -1771,7 +1622,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 
 			if (parsed.target) {
 				if (parsed.target.type === "pr") {
-					// Handle PR checkout (async operation)
 					target = await handlePrCheckout(ctx, parsed.target.ref);
 					if (!target) {
 						ctx.ui.notify("PR review failed. Returning to review menu.", "warning");
@@ -1781,7 +1631,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			// If no args or invalid args, show selector
 			if (!target) {
 				fromSelector = true;
 			}
@@ -1810,16 +1659,12 @@ export default function reviewExtension(pi: ExtensionAPI) {
 					return;
 				}
 
-				// Determine if we should use fresh session mode
-				// Check if this is a new session (no messages yet)
 				const entries = ctx.sessionManager.getEntries();
 				const messageCount = entries.filter((e) => e.type === "message").length;
 
-				// In an empty session, default to fresh review mode so /end-review works consistently.
 				let useFreshSession = messageCount === 0;
 
 				if (messageCount > 0) {
-					// Existing session - ask user which mode they want
 					const choice = await ctx.ui.select("Start review in:", ["Empty branch", "Current session"]);
 
 					if (choice === undefined) {
@@ -1840,7 +1685,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Custom prompt for review summaries - focuses on preserving actionable findings
 	const REVIEW_SUMMARY_PROMPT = `We are leaving a code-review branch and returning to the main coding branch.
 Create a structured handoff that can be used immediately to implement fixes.
 
@@ -2077,7 +1921,6 @@ Instructions:
 		}
 	}
 
-	// Register the /end-review command
 	pi.registerCommand("end-review", {
 		description: "Complete review and return to original position",
 		handler: async (_args, ctx) => {

@@ -1,12 +1,3 @@
-/**
- * Automatically trust checked-out repositories owned by trusted GitHub owners.
- *
- * This handles pi's project_trust event before project-local resources are
- * loaded. If the current directory is inside a git checkout whose origin remote
- * points at github.com/earendil-works/* or github.com/Joselay/*, trust is
- * granted and remembered so future sessions do not prompt.
- */
-
 import type { ExtensionAPI, ProjectTrustEventResult } from "@earendil-works/pi-coding-agent";
 
 const TRUSTED_GITHUB_OWNERS = new Set(["earendil-works", "joselay"]);
@@ -27,7 +18,6 @@ function parseGitHubRemoteUrl(remoteUrl: string): GitHubRepo | null {
 		return null;
 	}
 
-	// SCP-like SSH syntax: git@github.com:owner/repo.git
 	const scpMatch = value.match(/^(?:[^@/:\s]+@)?github\.com:([^/:\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
 	if (scpMatch) {
 		return {

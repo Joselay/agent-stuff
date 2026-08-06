@@ -1,47 +1,3 @@
-/**
- * Session Control Extension
- *
- * Enables inter-session communication via Unix domain sockets.  When enabled with
- * the `--session-control` flag, each pi session creates a control socket at
- * `~/.pi/session-control/<session-id>.sock` that accepts JSON-RPC commands.
- *
- * Features:
- * - Send messages to other running pi sessions (steer or follow-up mode)
- *   via tool (`send_to_session`) or startup CLI flags (`--control-session`, `--send-session-message`)
- * - Retrieve the last assistant message from a session
- * - Get AI-generated summaries of session activity
- * - Clear/rewind sessions to their initial state
- * - Subscribe to turn_end events for async coordination
- *
- * Once loaded the extension registers a `send_to_session` tool that allows the AI to
- * communicate with other pi sessions programmatically.
- *
- * Usage:
- *   pi --session-control
- *
- * One-shot startup send:
- *   pi -p --session-control --control-session <session-name|session-id> --send-session-message <text>
- *     [--send-session-mode steer|follow_up] [--send-session-wait turn_end|message_processed]
- *     [--send-session-include-sender-info]
- *   (startup send is one-way by default; use --send-session-wait turn_end to capture response on stdout)
- *
- * Environment:
- *   Sets PI_SESSION_ID when enabled, allowing child processes to discover
- *   the current session.
- *
- * RPC Protocol:
- *   Commands are newline-delimited JSON objects with a `type` field:
- *   - { type: "send", message: "...", mode?: "steer"|"follow_up" }
- *   - { type: "get_message" }
- *   - { type: "get_summary" }
- *   - { type: "clear", summarize?: boolean }
- *   - { type: "abort" }
- *   - { type: "subscribe", event: "turn_end" }
- *
- *   Responses are JSON objects with { type: "response", command, success, data?, error? }
- *   Events are JSON objects with { type: "event", event, data?, subscriptionId? }
- */
-
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -70,9 +26,6 @@ const SOCKET_SUFFIX = ".sock";
 const SESSION_MESSAGE_TYPE = "session-message";
 const SENDER_INFO_PATTERN = /<sender_info>[\s\S]*?<\/sender_info>/g;
 
-// ============================================================================
-// RPC Types
-// ============================================================================
 
 interface RpcResponse {
 	type: "response";
@@ -90,7 +43,6 @@ interface RpcEvent {
 	subscriptionId?: string;
 }
 
-// Unified command structure
 interface RpcSendCommand {
 	type: "send";
 	message: string;
@@ -133,9 +85,6 @@ type RpcCommand =
 	| RpcAbortCommand
 	| RpcSubscribeCommand;
 
-// ============================================================================
-// Subscription Management
-// ============================================================================
 
 interface TurnEndSubscription {
 	socket: net.Socket;
@@ -151,9 +100,6 @@ interface SocketState {
 	turnEndSubscriptions: TurnEndSubscription[];
 }
 
-// ============================================================================
-// Summarization
-// ============================================================================
 
 const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
@@ -188,9 +134,6 @@ async function selectSummarizationModel(
 	return currentModel;
 }
 
-// ============================================================================
-// Utilities
-// ============================================================================
 
 const STATUS_KEY = "session-control";
 
@@ -236,7 +179,6 @@ async function removeSocket(socketPath: string | null): Promise<void> {
 	}
 }
 
-// TODO: add GC for stale sockets/aliases older than 7 days.
 async function removeAliasesForSocket(socketPath: string | null): Promise<void> {
 	if (!socketPath) return;
 	try {
@@ -394,7 +336,6 @@ function writeResponse(socket: net.Socket, response: RpcResponse): void {
 	try {
 		socket.write(`${JSON.stringify(response)}\n`);
 	} catch {
-		// Socket may be closed
 	}
 }
 
@@ -402,7 +343,6 @@ function writeEvent(socket: net.Socket, event: RpcEvent): void {
 	try {
 		socket.write(`${JSON.stringify(event)}\n`);
 	} catch {
-		// Socket may be closed
 	}
 }
 
@@ -421,9 +361,6 @@ function parseCommand(line: string): { command?: RpcCommand; error?: string } {
 	}
 }
 
-// ============================================================================
-// Message Extraction
-// ============================================================================
 
 interface ExtractedMessage {
 	role: "user" | "assistant";
@@ -536,7 +473,6 @@ function parseSenderInfo(text: string): SenderInfo | null {
 				};
 			}
 		} catch {
-			// Ignore JSON parse errors, fall back to legacy parsing.
 		}
 	}
 
@@ -584,9 +520,6 @@ const renderSessionMessage: MessageRenderer = (message, { expanded }, theme) => 
 	return box;
 };
 
-// ============================================================================
-// Command Handlers
-// ============================================================================
 
 async function handleCommand(
 	pi: ExtensionAPI,
@@ -610,14 +543,12 @@ async function handleCommand(
 
 	void syncAlias(state, ctx);
 
-	// Abort
 	if (command.type === "abort") {
 		ctx.abort();
 		respond(true, "abort");
 		return;
 	}
 
-	// Subscribe to turn_end
 	if (command.type === "subscribe") {
 		if (command.event === "turn_end") {
 			const subscriptionId = id ?? `sub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -637,7 +568,6 @@ async function handleCommand(
 		return;
 	}
 
-	// Get last message
 	if (command.type === "get_message") {
 		const message = getLastAssistantMessage(ctx);
 		if (!message) {
@@ -648,7 +578,6 @@ async function handleCommand(
 		return;
 	}
 
-	// Get summary
 	if (command.type === "get_summary") {
 		const messages = getMessagesSinceLastPrompt(ctx);
 		if (messages.length === 0) {
@@ -702,7 +631,6 @@ async function handleCommand(
 		return;
 	}
 
-	// Clear session
 	if (command.type === "clear") {
 		if (!ctx.isIdle()) {
 			respond(false, "clear", undefined, "Session is busy - wait for turn to complete");
@@ -722,14 +650,10 @@ async function handleCommand(
 		}
 
 		if (command.summarize) {
-			// Summarization requires navigateTree which we don't have direct access to
-			// Return an error for now - the caller should clear without summarize
-			// or use a different approach
 			respond(false, "clear", undefined, "Clear with summarization not supported via RPC - use summarize=false");
 			return;
 		}
 
-		// Access internal session manager to rewind (type assertion to access non-readonly methods)
 		try {
 			const sessionManager = ctx.sessionManager as unknown as { rewindTo(id: string): void };
 			sessionManager.rewindTo(firstEntryId);
@@ -740,7 +664,6 @@ async function handleCommand(
 		return;
 	}
 
-	// Send message
 	if (command.type === "send") {
 		const message = command.message;
 		if (typeof message !== "string" || message.trim().length === 0) {
@@ -773,9 +696,6 @@ async function handleCommand(
 	respond(false, unsupportedType, undefined, `Unsupported command: ${unsupportedType}`);
 }
 
-// ============================================================================
-// Server Management
-// ============================================================================
 
 async function createServer(pi: ExtensionAPI, state: SocketState, socketPath: string): Promise<net.Server> {
 	const server = net.createServer((socket) => {
@@ -809,7 +729,6 @@ async function createServer(pi: ExtensionAPI, state: SocketState, socketPath: st
 		});
 	});
 
-	// Wait for server to start listening, with error handling
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(socketPath, () => {
@@ -852,7 +771,6 @@ async function sendRpcCommand(
 		socket.on("connect", () => {
 			socket.write(`${JSON.stringify(command)}\n`);
 
-			// If waiting for turn_end, also subscribe
 			if (waitForEvent === "turn_end") {
 				const subscribeCmd: RpcSubscribeCommand = { type: "subscribe", event: "turn_end" };
 				socket.write(`${JSON.stringify(subscribeCmd)}\n`);
@@ -871,11 +789,9 @@ async function sendRpcCommand(
 				try {
 					const msg = JSON.parse(line);
 
-					// Handle response
 					if (msg.type === "response") {
 						if (msg.command === command.type) {
 							response = msg;
-							// If not waiting for event, we're done
 							if (!waitForEvent) {
 								cleanup();
 								socket.end();
@@ -883,11 +799,9 @@ async function sendRpcCommand(
 								return;
 							}
 						}
-						// Ignore subscribe response
 						continue;
 					}
 
-					// Handle turn_end event
 					if (msg.type === "event" && msg.event === "turn_end" && waitForEvent === "turn_end") {
 						cleanup();
 						socket.end();
@@ -899,7 +813,6 @@ async function sendRpcCommand(
 						return;
 					}
 				} catch {
-					// Ignore parse errors, keep waiting
 				}
 			}
 		});
@@ -970,8 +883,6 @@ function updateSessionEnv(ctx: ExtensionContext | null, enabled: boolean): void 
 	process.env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
 }
 
-// Extension factories run before extension flag values are hydrated into runtime.flagValues,
-// so we inspect argv directly when deciding whether to register tools at load time.
 function wasBooleanFlagPassed(flagName: string): boolean {
 	const flag = `--${flagName}`;
 	return process.argv.slice(2).includes(flag);
@@ -981,9 +892,6 @@ function shouldRegisterControlTools(pi: ExtensionAPI): boolean {
 	return pi.getFlag(CONTROL_FLAG) === true || wasBooleanFlagPassed(CONTROL_FLAG);
 }
 
-// ============================================================================
-// Extension Export
-// ============================================================================
 
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag(CONTROL_FLAG, {
@@ -1072,7 +980,6 @@ export default function (pi: ExtensionAPI) {
 		await stopControlServer(state);
 	});
 
-	// Fire turn_end events to subscribers
 	pi.on("turn_end", (event: TurnEndEvent, ctx: ExtensionContext) => {
 		if (state.turnEndSubscriptions.length === 0) return;
 
@@ -1080,7 +987,6 @@ export default function (pi: ExtensionAPI) {
 		const lastMessage = getLastAssistantMessage(ctx);
 		const eventData = { message: lastMessage, turnIndex: event.turnIndex };
 
-		// Fire to all subscribers (one-shot)
 		const subscriptions = [...state.turnEndSubscriptions];
 		state.turnEndSubscriptions = [];
 
@@ -1095,9 +1001,6 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 
-// ============================================================================
-// Tool: send_to_session
-// ============================================================================
 
 function registerSessionTool(pi: ExtensionAPI, state: SocketState): void {
 	pi.registerTool({
@@ -1210,7 +1113,6 @@ Messages automatically include sender session info for replies. When you want a 
 			const senderSessionId = state.context?.sessionManager.getSessionId();
 
 			try {
-				// Handle each action
 				if (action === "get_message") {
 					const result = await sendRpcCommand(socketPath, { type: "get_message" });
 					if (!result.response.success) {
@@ -1272,7 +1174,6 @@ Messages automatically include sender session info for replies. When you want a 
 					};
 				}
 
-				// action === "send"
 				if (!params.message || params.message.trim().length === 0) {
 					return {
 						content: [{ type: "text", text: "Missing message for send action" }],
@@ -1295,9 +1196,7 @@ Messages automatically include sender session info for replies. When you want a 
 					mode: params.mode ?? "steer",
 				};
 
-				// Determine wait behavior
 				if (params.wait_until === "message_processed") {
-					// Just send and confirm delivery
 					const result = await sendRpcCommand(socketPath, sendCommand);
 					if (!result.response.success) {
 						return {
@@ -1313,9 +1212,8 @@ Messages automatically include sender session info for replies. When you want a 
 				}
 
 				if (params.wait_until === "turn_end") {
-					// Send and wait for turn to complete
 					const result = await sendRpcCommand(socketPath, sendCommand, {
-						timeout: 300000, // 5 minutes
+						timeout: 300000,
 						waitForEvent: "turn_end",
 					});
 
@@ -1341,7 +1239,6 @@ Messages automatically include sender session info for replies. When you want a 
 					};
 				}
 
-				// No wait - just send
 				const result = await sendRpcCommand(socketPath, sendCommand);
 				if (!result.response.success) {
 					return {
@@ -1370,11 +1267,9 @@ Messages automatically include sender session info for replies. When you want a 
 			const sessionRef = args.sessionName ?? args.sessionId ?? "...";
 			const shortSessionRef = sessionRef.length > 12 ? sessionRef.slice(0, 8) + "..." : sessionRef;
 
-			// Build the header line
 			let header = theme.fg("toolTitle", theme.bold("→ session "));
 			header += theme.fg("accent", shortSessionRef);
 
-			// Add action-specific info
 			if (action === "send") {
 				const mode = args.mode ?? "steer";
 				const wait = args.wait_until;
@@ -1386,11 +1281,9 @@ Messages automatically include sender session info for replies. When you want a 
 				header += theme.fg("muted", ` (${action})`);
 			}
 
-			// For send action, show the message
 			if (action === "send" && args.message) {
 				const msg = args.message;
 				const preview = msg.length > 80 ? msg.slice(0, 80) + "..." : msg;
-				// Handle multi-line messages
 				const firstLine = preview.split("\n")[0];
 				const hasMore = preview.includes("\n") || msg.length > 80;
 				return new Text(
@@ -1407,19 +1300,16 @@ Messages automatically include sender session info for replies. When you want a 
 			const details = result.details as Record<string, unknown> | undefined;
 			const isError = (result as { isError?: boolean }).isError === true;
 
-			// Error case
 			if (isError || details?.error) {
 				const errorMsg = (details?.error as string) || result.content[0]?.type === "text" ? (result.content[0] as { type: "text"; text: string }).text : "Unknown error";
 				return new Text(theme.fg("error", "✗ ") + theme.fg("error", errorMsg), 0, 0);
 			}
 
-			// Detect action from details structure
 			const hasMessage = details && "message" in details && details.message;
 			const hasSummary = details && "summary" in details;
 			const hasCleared = details && "cleared" in details;
 			const hasTurnIndex = details && "turnIndex" in details;
 
-			// get_message or turn_end result with message
 			if (hasMessage) {
 				const message = details.message as ExtractedMessage;
 				const icon = theme.fg("success", "✓");
@@ -1436,7 +1326,6 @@ Messages automatically include sender session info for replies. When you want a 
 					return container;
 				}
 
-				// Collapsed view - show preview
 				const preview = message.content.length > 200
 					? message.content.slice(0, 200) + "..."
 					: message.content;
@@ -1450,7 +1339,6 @@ Messages automatically include sender session info for replies. When you want a 
 				return new Text(text, 0, 0);
 			}
 
-			// get_summary result
 			if (hasSummary) {
 				const summary = details.summary as string;
 				const model = details.model as string | undefined;
@@ -1477,7 +1365,6 @@ Messages automatically include sender session info for replies. When you want a 
 				return new Text(text, 0, 0);
 			}
 
-			// clear result
 			if (hasCleared) {
 				const alreadyAtRoot = details.alreadyAtRoot as boolean | undefined;
 				const icon = theme.fg("success", "✓");
@@ -1485,7 +1372,6 @@ Messages automatically include sender session info for replies. When you want a 
 				return new Text(icon + " " + theme.fg("muted", msg), 0, 0);
 			}
 
-			// send result (no wait or message_processed)
 			if (details && "delivered" in details) {
 				const mode = details.mode as string | undefined;
 				const icon = theme.fg("success", "✓");
@@ -1494,7 +1380,6 @@ Messages automatically include sender session info for replies. When you want a 
 				return new Text(text, 0, 0);
 			}
 
-			// Fallback - just show the text content
 			const text = result.content[0];
 			const content = text?.type === "text" ? text.text : "(no output)";
 			return new Text(theme.fg("success", "✓ ") + theme.fg("muted", content), 0, 0);
@@ -1502,9 +1387,6 @@ Messages automatically include sender session info for replies. When you want a 
 	});
 }
 
-// ============================================================================
-// Tool: list_sessions
-// ============================================================================
 
 function registerListSessionsTool(pi: ExtensionAPI): void {
 	pi.registerTool({

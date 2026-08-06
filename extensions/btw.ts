@@ -290,16 +290,12 @@ export class BtwOverlay extends Container implements Focusable {
 	}
 
 	override render(width: number): string[] {
-		// Pi owns overlay width, centering, and margins. This component only
-		// sizes its content within the width it receives.
 		if (width <= 0) return [];
 		if (width < 6) return [truncateToWidth("BTW", width, "")];
 		const dialogWidth = width;
 		const innerWidth = dialogWidth - 2;
 		const contentWidth = Math.max(1, innerWidth - BtwOverlay.PAD * 2);
 
-		// Overlay maxHeight clips output rather than passing a height to render().
-		// Budget every line here so the input cannot be clipped on tiny screens.
 		const terminalRows = this.tui.terminal.rows || 30;
 		const availRows = Math.max(1, terminalRows - BTW_OVERLAY_MARGIN * 2);
 		const dialogHeight = Math.max(
@@ -326,7 +322,6 @@ export class BtwOverlay extends Container implements Focusable {
 				this.frameLine(inputLine, contentWidth),
 				this.borderLine(innerWidth, "bottom"),
 			];
-			// Prefer retaining the focused input when only one or two rows fit.
 			if (dialogHeight === 1) return [compact[2]!];
 			if (dialogHeight === 2) return [compact[1]!, compact[2]!];
 			return compact.slice(0, dialogHeight);

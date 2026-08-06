@@ -1,8 +1,3 @@
-/**
- * Standalone port of Joselay/pi-kit’s complete custom footer.
- * Source: https://github.com/Joselay/pi-kit/tree/main/extensions/cosmetic/footer.ts
- * Includes Codex/Spark rolling limits, fast mode, context, and extension statuses.
- */
 import type { ContextUsage, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
@@ -214,7 +209,6 @@ export default function statusline(pi: ExtensionAPI): void {
 				requestRender?.();
 			}
 		} catch {
-			// Best-effort snapshot; response headers can still provide rolling data.
 		}
 	}
 
@@ -246,9 +240,6 @@ export default function statusline(pi: ExtensionAPI): void {
 				dispose() { unsubscribe(); requestRender = undefined; },
 				invalidate() {},
 				render(width: number): string[] {
-					// ExtensionContext values are lazy and current at call time. Read
-					// them while rendering, as pi's built-in footer does, rather than
-					// displaying lifecycle-event snapshots.
 					const model = activeContext?.model;
 					const contextUsage = activeContext?.getContextUsage();
 					const thinkingLevel = activeContext?.thinkingLevel ?? "off";
@@ -292,9 +283,6 @@ export default function statusline(pi: ExtensionAPI): void {
 		const update = usageFromHeaders(event.headers);
 		if (update) { generation++; usage = mergeUsage(usage, update); requestRender?.(); }
 	});
-	// A run may contain many model/tool turns. Refresh after each completed turn
-	// instead of waiting for agent_settled so rolling limits stay current during
-	// long-running agents.
 	pi.on("turn_end", (_event, ctx) => {
 		if (ctx.model?.provider === CODEX_PROVIDER) void refreshUsage(ctx);
 		requestRender?.();
@@ -308,9 +296,6 @@ export default function statusline(pi: ExtensionAPI): void {
 		usage = undefined;
 	});
 	pi.on("model_select", (event, ctx) => {
-		// /usage returns the shared Codex pool plus additional pools such as
-		// Spark. Keep the cached snapshot visible, but always refresh on entry
-		// to Codex so an in-flight/stale snapshot cannot survive a model switch.
 		if (event.model.provider === CODEX_PROVIDER) void refreshUsage(ctx);
 		else generation++;
 		requestRender?.();

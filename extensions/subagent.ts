@@ -136,7 +136,6 @@ function attachToSubagentAndExit(rawTarget: string): never {
 	let socket = tmuxSocketPath();
 	let session: string;
 	if (target.startsWith("v1.")) {
-		// Keep attachment working for sessions started before session-id targets.
 		try {
 			const legacy = JSON.parse(Buffer.from(target.slice(3), "base64url").toString("utf8")) as {
 				s?: unknown;
@@ -246,8 +245,6 @@ function registerChildReporter(pi: ExtensionAPI, resultPath: string): void {
 		}
 	};
 
-	// agent_settled was added after older peer type declarations but is present
-	// in the Pi runtime this extension targets.
 	(
 		pi.on as unknown as (
 			event: "agent_settled",
@@ -367,10 +364,6 @@ function resolveModel(
 	let provider = explicitProvider || ctx.model?.provider || "";
 	let model = explicitModel || ctx.model?.id || "";
 
-	// A slash in an inherited id can be part of the id itself (for example,
-	// OpenRouter's openai/gpt-* models). Only interpret an explicit model as
-	// provider/model when no separate provider was supplied. If both are given
-	// and the prefixes agree, accept the redundant canonical provider/model form.
 	const slashIndex = explicitModel?.indexOf("/") ?? -1;
 	if (explicitModel && slashIndex > 0) {
 		const modelProvider = explicitModel.slice(0, slashIndex);
@@ -570,7 +563,6 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 								childResult = JSON.parse(await readFile(resultPath, "utf8")) as ChildResult;
 								break;
 							} catch {
-								// The result file is created atomically when the child settles.
 							}
 
 							const paneResult = await pi.exec("tmux", tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxTarget), {

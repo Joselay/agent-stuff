@@ -1,8 +1,3 @@
-/**
- * Standalone installation of Joselay/pi-kit extensions/fast.
- * Source: https://github.com/Joselay/pi-kit/tree/main/extensions/fast
- * Upstream commit: 3b44674f70e071f3eebda04e88d6d75060231d1a
- */
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -117,8 +112,6 @@ export default function fastMode(pi: ExtensionAPI) {
 	let enabled = readPersistedEnabled() ?? isEnabledByEnv();
 
 	function publishActiveState(ctx: ExtensionContext, model: Model | undefined = ctx.model): void {
-		// Publish the decided answer, not the ingredients: subscribers should not
-		// have to know which models carry the priority tier.
 		pi.events.emit(CODEX_FAST_CHANGED_EVENT, {
 			active: enabled && modelSupportsCodexFastMode(model),
 		} satisfies CodexFastChanged);
@@ -137,8 +130,6 @@ export default function fastMode(pi: ExtensionAPI) {
 		publishActiveState(ctx);
 	});
 
-	// `active` depends on the model, so a model switch changes it without any
-	// change to `enabled`.
 	pi.on("model_select", (event, ctx) => {
 		publishActiveState(ctx, event.model);
 	});

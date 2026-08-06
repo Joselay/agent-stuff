@@ -107,12 +107,10 @@ elif [[ -n "$socket_path" ]]; then
   tmux_cmd+=(-S "$socket_path")
 fi
 
-# End time in epoch seconds (integer, good enough for polling)
 start_epoch=$(date +%s)
 deadline=$((start_epoch + timeout))
 
 while true; do
-  # -J joins wrapped lines, -S uses negative index to read last N lines
   if ! pane_text="$("${tmux_cmd[@]}" capture-pane -p -J -t "$target" -S "-${lines}" 2>/dev/null)"; then
     echo "Unable to capture tmux target: $target" >&2
     exit 2

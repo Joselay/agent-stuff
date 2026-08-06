@@ -1,15 +1,3 @@
-/**
- * Q&A extraction hook - extracts questions from assistant responses
- *
- * Custom interactive TUI for answering questions.
- *
- * Demonstrates the "prompt generator" pattern with custom TUI:
- * 1. /answer command gets the last assistant message
- * 2. Shows a spinner while extracting questions as structured JSON
- * 3. Presents an interactive TUI to navigate and answer questions
- * 4. Submits the compiled answers when done
- */
-
 import { complete, parseJsonWithRepair, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, Theme } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
@@ -31,7 +19,6 @@ type DictateEditorBridge = {
 	decorate<T extends { insertTextAtCursor?(text: string): void; [key: string]: any }>(editor: T, tui: TUI): T;
 };
 
-// Structured output format for question extraction
 interface ExtractedQuestion {
 	question: string;
 	context?: string;
@@ -81,10 +68,6 @@ Example output:
 const CODEX_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.3-codex"];
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
-/**
- * Prefer a fast configured Codex model for extraction, then haiku, then the
- * current model.
- */
 async function selectExtractionModel(
 	currentModel: Model<Api>,
 	modelRegistry: ModelRegistry,
@@ -147,9 +130,6 @@ function toExtractionResult(value: unknown): ExtractionResult | null {
 	return { questions };
 }
 
-/**
- * Parse the JSON response from the LLM.
- */
 function parseExtractionResult(text: string): ExtractionResult | null {
 	const candidates = new Set<string>();
 	const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -173,16 +153,12 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 				return result;
 			}
 		} catch {
-			// Try the next candidate.
 		}
 	}
 
 	return null;
 }
 
-/**
- * Interactive Q&A component for answering extracted questions
- */
 class QnAComponent implements Component, Focusable {
 	readonly wantsKeyRelease = true;
 	private readonly answers: string[];
@@ -214,7 +190,6 @@ class QnAComponent implements Component, Focusable {
 		this.yellow = (text) => theme.fg("warning", text);
 		this.gray = (text) => theme.fg("muted", text);
 
-		// Create a minimal theme for the editor
 		const editorTheme: EditorTheme = {
 			borderColor: this.dim,
 			selectList: {
@@ -233,8 +208,6 @@ class QnAComponent implements Component, Focusable {
 		if (typeof disposeDictation === "function") {
 			this.disposeEditor = disposeDictation.bind(this.editor);
 		}
-		// Disable the editor's built-in submit (which clears the editor)
-		// We'll handle Enter ourselves to preserve the text
 		this.editor.disableSubmit = true;
 		this.editor.onChange = () => {
 			this.invalidate();
@@ -269,7 +242,6 @@ class QnAComponent implements Component, Focusable {
 	private submit(): void {
 		this.saveCurrentAnswer();
 
-		// Build the response text
 		const parts: string[] = [];
 		for (let i = 0; i < this.questions.length; i++) {
 			const q = this.questions[i];
@@ -300,7 +272,6 @@ class QnAComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		// Handle confirmation dialog
 		if (this.showingConfirmation) {
 			if (matchesKey(data, Key.enter) || data.toLowerCase() === "y") {
 				this.submit();
@@ -314,13 +285,11 @@ class QnAComponent implements Component, Focusable {
 			return;
 		}
 
-		// Global navigation and commands
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			this.cancel();
 			return;
 		}
 
-		// Tab / Shift+Tab for navigation
 		if (matchesKey(data, Key.tab)) {
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
@@ -334,8 +303,6 @@ class QnAComponent implements Component, Focusable {
 			return;
 		}
 
-		// Arrow up/down for question navigation when editor is empty
-		// (Editor handles its own cursor navigation when there's content)
 		if (matchesKey(data, Key.up) && this.editor.getText() === "") {
 			if (this.currentIndex > 0) {
 				this.navigateTo(this.currentIndex - 1);
@@ -349,22 +316,17 @@ class QnAComponent implements Component, Focusable {
 			}
 		}
 
-		// Handle Enter ourselves (editor's submit is disabled)
-		// Plain Enter moves to next question or shows confirmation on last question
-		// Shift+Enter adds a newline (handled by editor)
 		if (matchesKey(data, Key.enter) && !matchesKey(data, Key.shift("enter"))) {
 			this.saveCurrentAnswer();
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
 			} else {
-				// On last question - show confirmation
 				this.showingConfirmation = true;
 			}
 			this.refresh();
 			return;
 		}
 
-		// Pass to editor
 		this.editor.handleInput(data);
 		this.refresh();
 	}
@@ -374,10 +336,8 @@ class QnAComponent implements Component, Focusable {
 		const boxWidth = Math.max(2, Math.min(width, 120));
 		const contentWidth = Math.max(1, boxWidth - 4);
 
-		// Helper to create horizontal lines (dim the whole thing at once)
 		const horizontalLine = (count: number) => "─".repeat(count);
 
-		// Helper to create a box line
 		const boxLine = (content: string, leftPad: number = 2): string => {
 			const paddedContent = " ".repeat(leftPad) + content;
 			const contentLen = visibleWidth(paddedContent);
@@ -394,13 +354,11 @@ class QnAComponent implements Component, Focusable {
 			return line + " ".repeat(Math.max(0, width - len));
 		};
 
-		// Title
 		lines.push(padToWidth(this.dim("╭" + horizontalLine(boxWidth - 2) + "╮")));
 		const title = `${this.bold(this.cyan("Questions"))} ${this.dim(`(${this.currentIndex + 1}/${this.questions.length})`)}`;
 		lines.push(padToWidth(boxLine(title)));
 		lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 
-		// Progress indicator
 		const progressParts: string[] = [];
 		for (let i = 0; i < this.questions.length; i++) {
 			const answered = (this.answers[i]?.trim() || "").length > 0;
@@ -416,7 +374,6 @@ class QnAComponent implements Component, Focusable {
 		lines.push(padToWidth(boxLine(progressParts.join(" "))));
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Current question
 		const q = this.questions[this.currentIndex];
 		const questionText = `${this.bold("Q:")} ${q.question}`;
 		const wrappedQuestion = wrapTextWithAnsi(questionText, contentWidth);
@@ -424,7 +381,6 @@ class QnAComponent implements Component, Focusable {
 			lines.push(padToWidth(boxLine(line)));
 		}
 
-		// Context if present
 		if (q.context) {
 			lines.push(padToWidth(emptyBoxLine()));
 			const contextText = this.gray(`> ${q.context}`);
@@ -436,24 +392,19 @@ class QnAComponent implements Component, Focusable {
 
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Render the editor component (multi-line input) with padding
-		// Skip the first and last lines (editor's own border lines)
 		const answerPrefix = this.bold("A: ");
-		const editorWidth = Math.max(1, contentWidth - 7); // Extra padding + space for "A: "
+		const editorWidth = Math.max(1, contentWidth - 7);
 		const editorLines = this.editor.render(editorWidth);
 		for (let i = 1; i < editorLines.length - 1; i++) {
 			if (i === 1) {
-				// First content line gets the "A: " prefix
 				lines.push(padToWidth(boxLine(answerPrefix + editorLines[i])));
 			} else {
-				// Subsequent lines get padding to align with the first line
 				lines.push(padToWidth(boxLine("   " + editorLines[i])));
 			}
 		}
 
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Confirmation dialog or footer with controls
 		if (this.showingConfirmation) {
 			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 			const confirmMsg = `${this.yellow("Submit all answers?")} ${this.dim("(Enter/y to confirm, Esc/n to cancel)")}`;
@@ -481,7 +432,6 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Find the last assistant message on the current branch
 			const branch = ctx.sessionManager.getBranch();
 			let lastAssistantText: string | undefined;
 
@@ -510,10 +460,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Select the best model for extraction.
 			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
 
-			// Run extraction with loader UI
 			const extractionOutcome = await ctx.ui.custom<ExtractionOutcome>((tui, theme, _kb, done) => {
 				const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
 				loader.onAbort = () => done({ status: "cancelled" });
@@ -579,7 +527,6 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Show the Q&A component
 			const answersResult = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 				return new QnAComponent(extractionResult.questions, tui, theme, done);
 			});
@@ -589,7 +536,6 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Send the answers directly as a message and trigger a turn
 			pi.sendMessage(
 				{
 					customType: "answers",
