@@ -32,10 +32,16 @@ type TaskResult<T> =
 	| { status: "cancelled" }
 	| { status: "failed"; message: string };
 
-const SYSTEM_PROMPT = `Extract every question requiring user input from the conversation text.
-Return only JSON in this shape:
-{"questions":[{"question":"Question text","context":"Optional essential context"}]}
-Keep questions concise and in source order. Omit context unless essential. Return {"questions":[]} when none exist.`;
+const SYSTEM_PROMPT = `Extract every actionable question the assistant asks the user.
+
+Include requests for missing information, choices, preferences, or confirmation, even when phrased as an instruction. Treat each independently answerable request as one question and preserve source order.
+
+Exclude rhetorical or self-answered questions, quoted examples, and questions addressed to someone else. Keep each question concise and answerable without inventing details. Add context only when a reference, constraint, or set of options is essential to answering it.
+
+Return only valid JSON with this exact shape:
+{"questions":[{"question":"Question text","context":"Essential context"}]}
+
+Omit "context" when it is unnecessary. Return {"questions":[]} when there are no actionable questions.`;
 const EXTRACTION_PROVIDER = "openai-codex";
 const EXTRACTION_MODEL = "gpt-5.6-luna";
 
