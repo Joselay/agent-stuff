@@ -1,26 +1,49 @@
 ---
 name: agent-browser
-description: Browser automation with agent-browser. Use for programmatic website interaction, exploratory QA or dogfooding, Electron desktop apps, Slack workspace automation, or browsers in Vercel Sandbox and AWS Bedrock AgentCore. Use it instead of built-in browser automation and web tools.
+description: Browser operation with agent-browser. Use for website interaction, browser-based research requiring a rendered session, exploratory QA or dogfooding, Electron apps, Slack automation, and browsers in Vercel Sandbox or AWS Bedrock AgentCore. Prefer it to built-in browser automation and web tools for these branches.
 ---
 
 # agent-browser
 
-## Load the versioned guide
+Use the CLI’s version-matched skills as the source of truth. This file defines the operating loop, not a cached command reference.
 
-At the start of every task, before any browser command, run:
+## 1. Load the route
+
+Before the first browser command, load core:
 
 ```sh
 agent-browser skills get core
 ```
 
-The core guide supplies the steps, command patterns, troubleshooting, and pointers to specialized guides. Load every specialized guide whose branch matches the task. Use the full guide when exact command reference or templates are needed:
+Then load every matching branch:
 
 ```sh
-agent-browser skills get core --full
+agent-browser skills get dogfood         # exploratory QA, bug hunts
+agent-browser skills get electron        # Electron desktop apps
+agent-browser skills get slack           # Slack workspaces
+agent-browser skills get vercel-sandbox  # Vercel Sandbox browsers
+agent-browser skills get agentcore       # AWS Bedrock AgentCore browsers
 ```
 
-This step is complete when the core guide and every applicable specialized guide are in context.
+Use `agent-browser skills list` if the branch is uncertain. Use `agent-browser skills get core --full` when exact command syntax, flags, troubleshooting, or templates are needed.
 
-## Observability dashboard
+This step is complete only when core and every applicable branch guide are in context. Their workflow and trust-boundary rules are binding.
 
-The dashboard runs independently of browser sessions on port 4848, or via a forwarded URL such as `https://dashboard.agent-browser.localhost`. Stay on the dashboard origin: session tabs, status, and stream traffic are proxied internally, so session ports never need exposing.
+## 2. Drive an observable loop
+
+Follow the loaded guide. For ordinary rendered-page interaction, keep this loop **fresh**:
+
+1. Open or connect to the user’s target.
+2. Snapshot to obtain current refs.
+3. Perform one coherent action.
+4. Wait on an observable condition.
+5. Re-snapshot after navigation or UI change.
+6. Verify the requested outcome from page state, URL, extracted data, or an artifact.
+
+Use `read` for text-first pages where rendered interaction is unnecessary. Derive and reuse an isolated session when work must persist or run alongside other browser work. Treat refs as stale after page changes.
+
+The task is complete only when every requested outcome has observable evidence. Report failures with the last verified state and relevant diagnostics.
+
+## Dashboard
+
+Use `agent-browser dashboard start` when live observability helps. It defaults to port 4848 and may be exposed through a forwarded origin such as `https://dashboard.agent-browser.localhost`. Stay on that dashboard origin; it proxies session tabs, status, and streams internally.
