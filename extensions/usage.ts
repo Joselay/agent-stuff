@@ -20,38 +20,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type NotifyLevel = "info" | "warning" | "error";
-function notify(ctx: ExtensionContext, message: string, level: NotifyLevel = "info"): void {
-	if (ctx.hasUI) ctx.ui.notify(message, level);
-}
-
 const PROVIDER_ID = "openai-codex";
 
 const CHATGPT_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_TIMEOUT_MS = 10_000;
 
-type CodexRequestOptions = {
-	userAgent: string;
-	signal?: AbortSignal;
-	allow404?: boolean;
-};
-
-function authClaim(access: string): Record<string, unknown> | undefined {
+function accountIdFromAccessToken(access: string): string | undefined {
 	try {
 		const encoded = access.split(".")[1];
 		if (!encoded) return undefined;
 		const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
 		if (!isRecord(payload)) return undefined;
 		const claim = payload["https://api.openai.com/auth"];
-		return isRecord(claim) ? claim : undefined;
+		const accountId = isRecord(claim) ? claim.chatgpt_account_id : undefined;
+		return typeof accountId === "string" && accountId ? accountId : undefined;
 	} catch {
 		return undefined;
 	}
-}
-
-function accountIdFromAccessToken(access: string): string | undefined {
-	const value = authClaim(access)?.chatgpt_account_id;
-	return typeof value === "string" && value ? value : undefined;
 }
 
 function codexApiBaseUrl(raw: string): string {
@@ -69,48 +54,48 @@ function codexApiBaseUrl(raw: string): string {
 	return baseUrl;
 }
 
-function codexAccount(ctx: ExtensionContext) {
-	return {
-		async request(path: string, options: CodexRequestOptions): Promise<unknown> {
-			const resolved = await ctx.modelRegistry.getProviderAuth(PROVIDER_ID);
-			const access = resolved?.auth.apiKey;
-			if (!access) {
-				const configured = ctx.modelRegistry.getProviderAuthStatus(PROVIDER_ID).configured;
-				throw new Error(configured
-					? "Couldn't refresh OpenAI Codex credentials. Try /login again."
-					: "Log in to OpenAI Codex with /login first.");
-			}
+async function requestCodex(
+	ctx: ExtensionContext,
+	path: string,
+	options: { signal?: AbortSignal; allow404?: boolean } = {},
+): Promise<unknown> {
+	const resolved = await ctx.modelRegistry.getProviderAuth(PROVIDER_ID);
+	const access = resolved?.auth.apiKey;
+	if (!access) {
+		const configured = ctx.modelRegistry.getProviderAuthStatus(PROVIDER_ID).configured;
+		throw new Error(configured
+			? "Couldn't refresh OpenAI Codex credentials. Try /login again."
+			: "Log in to OpenAI Codex with /login first.");
+	}
 
-			const configuredBase = process.env.PI_CODEX_CHATGPT_BASE_URL?.trim();
-			const baseUrl = codexApiBaseUrl(
-				configuredBase || resolved.auth.baseUrl || ctx.modelRegistry.getProvider(PROVIDER_ID)?.baseUrl || CHATGPT_BASE_URL,
-			);
-			const headers = new Headers(
-				Object.entries(resolved.auth.headers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-			);
-			headers.set("authorization", `Bearer ${access}`);
-			const accountId = accountIdFromAccessToken(access) ?? headers.get("chatgpt-account-id") ?? undefined;
-			if (accountId) headers.set("chatgpt-account-id", accountId);
-			headers.set("user-agent", options.userAgent);
+	const configuredBase = process.env.PI_CODEX_CHATGPT_BASE_URL?.trim();
+	const baseUrl = codexApiBaseUrl(
+		configuredBase || resolved.auth.baseUrl || ctx.modelRegistry.getProvider(PROVIDER_ID)?.baseUrl || CHATGPT_BASE_URL,
+	);
+	const headers = new Headers(
+		Object.entries(resolved.auth.headers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+	);
+	headers.set("authorization", `Bearer ${access}`);
+	const accountId = accountIdFromAccessToken(access) ?? headers.get("chatgpt-account-id");
+	if (accountId) headers.set("chatgpt-account-id", accountId);
+	headers.set("user-agent", USER_AGENT);
 
-			const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-			const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-			const prefix = baseUrl.includes("/backend-api") ? "/wham" : "/api/codex";
-			const response = await fetch(`${baseUrl}${prefix}${path}`, { headers, signal });
-			const text = await response.text();
-			if (response.status === 404 && options.allow404) return undefined;
-			if (!response.ok) {
-				const detail = text.replace(/\s+/g, " ").trim().slice(0, 200);
-				throw new Error(`GET ${path} failed with status ${response.status}${detail ? `: ${detail}` : ""}`);
-			}
-			if (!text.trim()) return {};
-			try {
-				return JSON.parse(text) as unknown;
-			} catch {
-				throw new Error(`GET ${path} returned invalid JSON`);
-			}
-		},
-	};
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+	const prefix = baseUrl.includes("/backend-api") ? "/wham" : "/api/codex";
+	const response = await fetch(`${baseUrl}${prefix}${path}`, { headers, signal });
+	const text = await response.text();
+	if (response.status === 404 && options.allow404) return undefined;
+	if (!response.ok) {
+		const detail = text.replace(/\s+/g, " ").trim().slice(0, 200);
+		throw new Error(`GET ${path} failed with status ${response.status}${detail ? `: ${detail}` : ""}`);
+	}
+	if (!text.trim()) return {};
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		throw new Error(`GET ${path} returned invalid JSON`);
+	}
 }
 
 const USER_AGENT = "pi-usage/0.1.0";
@@ -151,7 +136,6 @@ type UsagePayload = {
 		individual_limit?: {
 			limit?: string;
 			used?: string;
-			remaining?: string;
 			used_percent?: number;
 			reset_at?: number;
 		} | null;
@@ -253,13 +237,12 @@ type Gauge = {
 	showTime?: boolean;
 	alwaysShowDate?: boolean;
 	extraSubtext?: string;
-	subtextOverride?: string;
-	trailing?: Array<{ text: string; color?: "error" | "warning" }>;
+	trailing?: Array<{ text: string; color: "error" | "warning" }>;
 };
 
 type Header = {
 	title: string;
-	subtitle?: string;
+	subtitle: string;
 };
 type Section = Header | Gauge;
 
@@ -300,8 +283,8 @@ function gaugesForLimit(details: RateLimitDetails | null | undefined, scope: str
 		(gauge): gauge is Gauge => gauge !== undefined,
 	);
 
-	if (gauges.length > 0) {
-		const last = gauges[gauges.length - 1]!;
+	const last = gauges.at(-1);
+	if (last) {
 		if (details.limit_reached) last.trailing = [{ text: "Limit reached", color: "error" }];
 		else if (details.allowed === false) last.trailing = [{ text: "Not allowed right now", color: "warning" }];
 	}
@@ -344,7 +327,7 @@ function accountRecords(accounts: AccountsPayload | undefined): AccountRecord[] 
 function accountDescriptor(snapshot: Snapshot): string | undefined {
 	const records = accountRecords(snapshot.accounts);
 	if (records.length === 0) return undefined;
-	const activeId = snapshot.usage.account_id ?? snapshot.accounts?.default_account_id ?? undefined;
+	const activeId = snapshot.usage.account_id ?? snapshot.accounts?.default_account_id;
 	const active = records.find((record) => (record.id ?? record.account_id) === activeId) ?? records[0]!;
 
 	const name = active.name?.trim();
@@ -410,7 +393,6 @@ function limitSectionsFor(snapshot: Snapshot): Section[] {
 }
 
 function gaugeSubtext(gauge: Gauge): string | undefined {
-	if (gauge.subtextOverride !== undefined) return gauge.subtextOverride;
 	const reset = gauge.resetsAt ? `Resets ${formatResetAt(gauge.resetsAt, gauge.showTime !== false, gauge.alwaysShowDate === true)}` : undefined;
 	if (gauge.extraSubtext) return reset ? `${gauge.extraSubtext} · ${reset}` : gauge.extraSubtext;
 	return reset;
@@ -421,7 +403,7 @@ function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
 	const remaining = `${Math.floor(remainingPercent)}% remaining`;
 	const subtext = gaugeSubtext(gauge);
 	const trailing = (gauge.trailing ?? []).map((line) =>
-		line.color ? theme.fg(line.color, line.text) : theme.fg("dim", line.text),
+		theme.fg(line.color, line.text),
 	);
 
 	if (maxWidth >= 62) {
@@ -443,18 +425,13 @@ function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
 
 function renderSection(section: Section, theme: Theme, maxWidth: number): string[] {
 	if (isGauge(section)) return renderGauge(section, theme, maxWidth);
-	const title = theme.bold(section.title);
-	const subtitle = section.subtitle ? theme.fg("dim", section.subtitle) : undefined;
-	return [title, ...(subtitle ? [subtitle] : [])];
+	return [theme.bold(section.title), theme.fg("dim", section.subtitle)];
 }
 
 async function loadSnapshot(ctx: ExtensionCommandContext, signal?: AbortSignal): Promise<Snapshot> {
-	const account = codexAccount(ctx);
-	const optional = (path: string) =>
-		account.request(path, { userAgent: USER_AGENT, signal, allow404: true }).catch(() => undefined);
 	const [usage, accounts] = await Promise.all([
-		account.request("/usage", { userAgent: USER_AGENT, signal }),
-		optional("/accounts/check"),
+		requestCodex(ctx, "/usage", { signal }),
+		requestCodex(ctx, "/accounts/check", { signal, allow404: true }).catch(() => undefined),
 	]);
 	return {
 		usage: (usage ?? {}) as UsagePayload,
@@ -466,7 +443,7 @@ function renderPlainReport(snapshot: Snapshot): string {
 	const lines: string[] = [];
 	for (const section of [accountSectionFor(snapshot), ...limitSectionsFor(snapshot)]) {
 		if (!isGauge(section)) {
-			lines.push(section.subtitle ? `${section.title}: ${section.subtitle}` : section.title);
+			lines.push(`${section.title}: ${section.subtitle}`);
 			continue;
 		}
 		const subtext = gaugeSubtext(section)?.replace(/^Resets /, "resets ");
@@ -477,8 +454,7 @@ function renderPlainReport(snapshot: Snapshot): string {
 }
 
 class UsageComponent implements Component {
-	private cachedWidth?: number;
-	private cachedLines?: string[];
+	private cache?: { width: number; lines: string[] };
 
 	constructor(
 		private readonly snapshot: Snapshot,
@@ -487,8 +463,7 @@ class UsageComponent implements Component {
 	) {}
 
 	invalidate(): void {
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
+		this.cache = undefined;
 	}
 
 	handleInput(data: string): void {
@@ -501,12 +476,8 @@ class UsageComponent implements Component {
 		}
 	}
 
-	private hint(): string {
-		return this.theme.fg("dim", "r refresh · Esc close");
-	}
-
 	render(width: number): string[] {
-		if (this.cachedWidth === width && this.cachedLines) return this.cachedLines;
+		if (this.cache?.width === width) return this.cache.lines;
 
 		const maxWidth = Math.max(1, Math.min(width, 80));
 		const lines: string[] = [];
@@ -517,14 +488,14 @@ class UsageComponent implements Component {
 			lines.push("", this.theme.fg("dim", "No limit data available"));
 		}
 		for (const section of sections) {
-			if (lines.length > 0) lines.push("");
+			lines.push("");
 			lines.push(...renderSection(section, this.theme, maxWidth));
 		}
-		lines.push("", this.hint());
+		lines.push("", this.theme.fg("dim", "r refresh · Esc close"));
 
-		this.cachedWidth = width;
-		this.cachedLines = lines.map((line) => truncateToWidth(line, width));
-		return this.cachedLines;
+		const rendered = lines.map((line) => truncateToWidth(line, width));
+		this.cache = { width, lines: rendered };
+		return rendered;
 	}
 }
 
@@ -536,7 +507,7 @@ export default function usage(pi: ExtensionAPI) {
 		handler: async (_args, ctx: ExtensionCommandContext) => {
 			if (ctx.mode !== "tui") {
 				if (busy) {
-					if (ctx.hasUI) notify(ctx, "Already loading usage", "warning");
+					if (ctx.hasUI) ctx.ui.notify("Already loading usage", "warning");
 					return;
 				}
 				busy = true;
@@ -546,7 +517,7 @@ export default function usage(pi: ExtensionAPI) {
 					pi.sendMessage({ customType: "usage", content, display: true }, { triggerTurn: false });
 				} catch (error) {
 					const message = `Couldn't load usage: ${errorText(error)}`;
-					if (ctx.hasUI) notify(ctx, message, "error");
+					if (ctx.hasUI) ctx.ui.notify(message, "error");
 					else pi.sendMessage({ customType: "usage", content: message, display: true }, { triggerTurn: false });
 				} finally {
 					busy = false;
