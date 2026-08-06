@@ -1,6 +1,7 @@
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -9,7 +10,8 @@ import { Box, Container, type SelectItem, SelectList, Text } from "@earendil-wor
 
 const PROVIDER = "openai-codex";
 const AUTH_PATH = join(getAgentDir(), "auth.json");
-const VAULT_PATH = join(getAgentDir(), "codex-accounts.json");
+const CACHE_ROOT = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+const VAULT_PATH = join(CACHE_ROOT, "pi", "codex-accounts.json");
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -67,6 +69,7 @@ function readVault(): Vault | undefined {
 async function atomicJsonWrite(path: string, value: unknown): Promise<void> {
 	const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
+		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 		await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 		await rename(temp, path);
 	} finally {
