@@ -107,7 +107,7 @@ function planLabel(plan: string | undefined): string {
 
 function windowLabel(window: UsageWindow | null | undefined): string | undefined {
 	if (window?.used_percent === undefined) return undefined;
-	const name = (window.limit_window_seconds ?? 0) >= 24 * 60 * 60 ? "week" : "session";
+	const name = (window.limit_window_seconds ?? 0) >= 24 * 60 * 60 ? "weekly" : "session";
 	return `${name} ${Math.max(0, Math.floor(100 - window.used_percent))}% left`;
 }
 
