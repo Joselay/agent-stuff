@@ -177,6 +177,7 @@ async function extractQuestions(
 }
 
 export class QnAComponent implements Component, Focusable {
+	readonly wantsKeyRelease = true;
 	private readonly answers: string[];
 	private readonly editor: Editor & { disposeDictation?: () => void };
 	private currentIndex = 0;
