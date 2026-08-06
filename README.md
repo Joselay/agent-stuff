@@ -15,14 +15,14 @@ Prompt templates live in [`prompts`](prompts):
 Skills live in [`skills`](skills). Each skill has a `SKILL.md` plus any helper files it needs.
 
 - [`/agent-browser`](skills/agent-browser) - Automate browsers, Electron apps, and exploratory QA with `agent-browser`.
-- [`/frontend-design`](skills/frontend-design) - Create distinctive, production-ready frontend UI with strong visual direction.
+- [`/frontend-design`](skills/frontend-design) - Frontend art direction for distinctive UI concepts, typography, palette, layout, and motion.
 - [`/google-workspace`](skills/google-workspace) - Operate Google Docs, Sheets, Drive, and Gmail through `gws`.
 - [`/imagegen`](skills/imagegen) - Generate and edit raster images with AI.
-- [`/librarian`](skills/librarian) - Cache and refresh remote git repositories for local research.
-- [`/tmux`](skills/tmux) - Control tmux sessions for interactive CLIs and long-running processes.
+- [`/librarian`](skills/librarian) - Research remote git repositories locally for inspection, comparison, or implementation reference.
+- [`/tmux`](skills/tmux) - Control tmux sessions for interactive CLIs, REPLs, debuggers, and long-running processes.
 - [`/transcribe`](skills/transcribe) - Create evidence-reviewed transcripts from audio or video.
 - [`/uv`](skills/uv) - Use `uv` for Python projects, scripts, dependencies, and builds.
-- [`/writing-great-skills`](skills/writing-great-skills) - Guidance for writing predictable, focused agent skills.
+- [`/writing-for-agents`](skills/writing-for-agents) - Guidance for writing agent-consumed documents (skills, `AGENTS.md`, `CLAUDE.md`).
 
 ## Extensions
 
