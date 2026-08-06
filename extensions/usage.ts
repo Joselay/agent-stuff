@@ -54,6 +54,21 @@ function accountIdFromAccessToken(access: string): string | undefined {
 	return typeof value === "string" && value ? value : undefined;
 }
 
+function codexApiBaseUrl(raw: string): string {
+	let baseUrl = raw
+		.trim()
+		.replace(/\/+$/, "")
+		.replace(/\/backend-api\/codex(?:\/responses)?$/, "/backend-api")
+		.replace(/\/api\/codex(?:\/responses)?$/, "");
+	if (
+		/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)(?:\/|$)/.test(baseUrl) &&
+		!baseUrl.includes("/backend-api")
+	) {
+		baseUrl += "/backend-api";
+	}
+	return baseUrl;
+}
+
 function codexAccount(ctx: ExtensionContext) {
 	return {
 		async request(path: string, options: CodexRequestOptions): Promise<unknown> {
@@ -66,19 +81,17 @@ function codexAccount(ctx: ExtensionContext) {
 					: "Log in to OpenAI Codex with /login first.");
 			}
 
-			const accountId = accountIdFromAccessToken(access);
-			if (!accountId) throw new Error("OpenAI Codex credentials are invalid. Try /login again.");
-
 			const configuredBase = process.env.PI_CODEX_CHATGPT_BASE_URL?.trim();
-			const baseUrl = (configuredBase || resolved.auth.baseUrl || ctx.modelRegistry.getProvider(PROVIDER_ID)?.baseUrl || CHATGPT_BASE_URL)
-				.replace(/\/+$/, "")
-				.replace(/\/codex(?:\/responses)?$/, "");
-			const headers: Record<string, string> = Object.fromEntries(
+			const baseUrl = codexApiBaseUrl(
+				configuredBase || resolved.auth.baseUrl || ctx.modelRegistry.getProvider(PROVIDER_ID)?.baseUrl || CHATGPT_BASE_URL,
+			);
+			const headers = new Headers(
 				Object.entries(resolved.auth.headers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 			);
-			headers.authorization = `Bearer ${access}`;
-			headers["chatgpt-account-id"] = accountId;
-			headers["user-agent"] = options.userAgent;
+			headers.set("authorization", `Bearer ${access}`);
+			const accountId = accountIdFromAccessToken(access) ?? headers.get("chatgpt-account-id") ?? undefined;
+			if (accountId) headers.set("chatgpt-account-id", accountId);
+			headers.set("user-agent", options.userAgent);
 
 			const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 			const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -174,7 +187,10 @@ function codexPlanLabel(planType: string | undefined): string | undefined {
 		prolite: "Pro Lite",
 		team: "Team",
 		business: "Business",
+		self_serve_business_prolite: "Business",
 		enterprise: "Enterprise",
+		ent26: "Enterprise",
+		enterprise_cbp_automation: "Enterprise (Automation)",
 		edu: "Edu",
 		education: "Edu",
 		guest: "Guest",
