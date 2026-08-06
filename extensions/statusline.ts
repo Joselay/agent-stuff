@@ -171,10 +171,6 @@ function visibleGroups(usage: Usage | undefined, model: Model | undefined): Usag
 	return usage.groups.filter((group) => group.kind === activeKind);
 }
 
-function hasActiveUsage(usage: Usage | undefined, model: Model | undefined): boolean {
-	return visibleGroups(usage, model).length > 0;
-}
-
 async function fetchUsage(ctx: ExtensionContext): Promise<Usage | undefined> {
 	const resolved = await ctx.modelRegistry.getProviderAuth(CODEX_PROVIDER);
 	const access = resolved?.auth.apiKey;
@@ -202,11 +198,7 @@ async function fetchUsage(ctx: ExtensionContext): Promise<Usage | undefined> {
 }
 
 export default function statusline(pi: ExtensionAPI): void {
-	let activeModel: Model;
 	let activeContext: ExtensionContext | undefined;
-	let activeCwd = "";
-	let activeContextUsage: ContextUsage | undefined;
-	let activeThinkingLevel = "off";
 	let requestRender: (() => void) | undefined;
 	let usage: Usage | undefined;
 	let fastActive = false;
@@ -214,7 +206,7 @@ export default function statusline(pi: ExtensionAPI): void {
 
 	async function refreshUsage(ctx: ExtensionContext): Promise<void> {
 		const current = ++generation;
-		if (activeModel?.provider !== CODEX_PROVIDER) return;
+		if (ctx.model?.provider !== CODEX_PROVIDER) return;
 		try {
 			const next = await fetchUsage(ctx);
 			if (current === generation && next) {
@@ -228,10 +220,6 @@ export default function statusline(pi: ExtensionAPI): void {
 
 	function install(ctx: ExtensionContext): void {
 		activeContext = ctx;
-		activeModel = ctx.model;
-		activeCwd = ctx.cwd;
-		activeContextUsage = ctx.getContextUsage();
-		activeThinkingLevel = ctx.thinkingLevel;
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const color = {
@@ -258,12 +246,17 @@ export default function statusline(pi: ExtensionAPI): void {
 				dispose() { unsubscribe(); requestRender = undefined; },
 				invalidate() {},
 				render(width: number): string[] {
-					const model = activeModel;
-					const project = [color.project(shortenPath(activeCwd))];
+					// ExtensionContext values are lazy and current at call time. Read
+					// them while rendering, as pi's built-in footer does, rather than
+					// displaying lifecycle-event snapshots.
+					const model = activeContext?.model;
+					const contextUsage = activeContext?.getContextUsage();
+					const thinkingLevel = activeContext?.thinkingLevel ?? "off";
+					const project = [color.project(shortenPath(activeContext?.cwd ?? ""))];
 					const branch = footerData.getGitBranch();
 					if (branch) project.push(color.branch(branch));
 					let modelText = color.model(model?.id || "no-model");
-					if (model?.reasoning) modelText += color.model(` (${activeThinkingLevel})`);
+					if (model?.reasoning) modelText += color.model(` (${thinkingLevel})`);
 					if (fastActive) modelText += separator() + color.session("fast");
 					const limits = visibleGroups(usage, model).flatMap((group) => group.parts.map((part) => {
 						const remaining = Math.max(0, 100 - part.used);
@@ -271,7 +264,7 @@ export default function statusline(pi: ExtensionAPI): void {
 							`${part.label} [${renderBar(remaining)}] ${remaining}% remaining`,
 						);
 					}));
-					const line = [project.join(separator()), modelText, color.context(contextLeft(activeContextUsage, model?.contextWindow ?? 0)), ...limits].join(separator());
+					const line = [project.join(separator()), modelText, color.context(contextLeft(contextUsage, model?.contextWindow ?? 0)), ...limits].join(separator());
 					const lines = [truncateToWidth(line, width, dim("..."))];
 					const statuses = [...footerData.getExtensionStatuses().entries()]
 						.sort(([a], [b]) => a.localeCompare(b))
@@ -282,7 +275,7 @@ export default function statusline(pi: ExtensionAPI): void {
 				},
 			};
 		});
-		if (activeModel?.provider === CODEX_PROVIDER) void refreshUsage(ctx);
+		if (ctx.model?.provider === CODEX_PROVIDER) void refreshUsage(ctx);
 	}
 
 	pi.events.on(USAGE_EVENT, (data: unknown) => {
@@ -294,42 +287,35 @@ export default function statusline(pi: ExtensionAPI): void {
 		fastActive = (data as { active?: boolean } | undefined)?.active === true;
 		requestRender?.();
 	});
-	pi.on("after_provider_response", (event) => {
-		if (activeModel?.provider !== CODEX_PROVIDER) return;
+	pi.on("after_provider_response", (event, ctx) => {
+		if (ctx.model?.provider !== CODEX_PROVIDER) return;
 		const update = usageFromHeaders(event.headers);
 		if (update) { generation++; usage = mergeUsage(usage, update); requestRender?.(); }
 	});
-	pi.on("agent_settled", () => {
-		if (!activeContext) return;
-		activeContextUsage = activeContext.getContextUsage();
-		if (activeModel?.provider === CODEX_PROVIDER) void refreshUsage(activeContext);
+	// A run may contain many model/tool turns. Refresh after each completed turn
+	// instead of waiting for agent_settled so rolling limits stay current during
+	// long-running agents.
+	pi.on("turn_end", (_event, ctx) => {
+		if (ctx.model?.provider === CODEX_PROVIDER) void refreshUsage(ctx);
 		requestRender?.();
 	});
+	pi.on("agent_settled", () => requestRender?.());
 	pi.on("session_start", (_event, ctx) => install(ctx));
 	pi.on("session_shutdown", () => {
 		generation++;
 		activeContext = undefined;
-		activeContextUsage = undefined;
 		requestRender = undefined;
 		usage = undefined;
 	});
 	pi.on("model_select", (event, ctx) => {
-		activeModel = event.model;
-		generation++;
 		// /usage returns the shared Codex pool plus additional pools such as
-		// Spark. Keep the complete snapshot across every model switch.
-		if (activeModel?.provider === CODEX_PROVIDER && !hasActiveUsage(usage, activeModel)) {
-			void refreshUsage(ctx);
-		}
+		// Spark. Keep the cached snapshot visible, but always refresh on entry
+		// to Codex so an in-flight/stale snapshot cannot survive a model switch.
+		if (event.model.provider === CODEX_PROVIDER) void refreshUsage(ctx);
+		else generation++;
 		requestRender?.();
 	});
-	pi.on("thinking_level_select", (event) => {
-		activeThinkingLevel = event.level;
-		requestRender?.();
-	});
+	pi.on("thinking_level_select", () => requestRender?.());
 	pi.on("message_end", () => requestRender?.());
-	pi.on("session_compact", () => {
-		if (activeContext) activeContextUsage = activeContext.getContextUsage();
-		requestRender?.();
-	});
+	pi.on("session_compact", () => requestRender?.());
 }
