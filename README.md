@@ -1,8 +1,14 @@
 # Agent Stuff
 
-My personal [Pi Coding Agent](https://pi.dev) package: reusable skills, extensions, and a theme used across projects.
+My personal [Pi Coding Agent](https://pi.dev) package: reusable skills, extensions, prompt templates, and a theme used across projects.
 
 Most items are tuned for my workflow and environment, so expect to adjust paths, credentials, or defaults before reusing them elsewhere.
+
+## Prompt Templates
+
+Prompt templates live in [`prompts`](prompts):
+
+- [`/discuss`](prompts/discuss.md) - Planning interviewer. Inspects first, asks focused questions in short rounds with defaults, stops when the plan is clear. Does not implement.
 
 ## Skills
 
