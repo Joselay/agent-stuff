@@ -357,7 +357,7 @@ function gaugeSubtext(gauge: Gauge): string | undefined {
 
 function renderGauge(gauge: Gauge, theme: Theme, maxWidth: number): string[] {
 	const remainingPercent = Math.max(0, Math.min(100, 100 - gauge.utilization));
-	const remaining = `${Math.floor(remainingPercent)}% remaining`;
+	const remaining = `${Math.floor(remainingPercent)}% left`;
 	const subtext = gaugeSubtext(gauge);
 	const trailing = (gauge.trailing ?? []).map((line) =>
 		theme.fg(line.color, line.text),
@@ -394,7 +394,7 @@ function renderPlainReport(usage: UsagePayload): string {
 		}
 		const subtext = gaugeSubtext(section)?.replace(/^Resets /, "resets ");
 		const remaining = Math.max(0, Math.min(100, 100 - section.utilization));
-		lines.push(`${section.title}: ${Math.floor(remaining)}% remaining${subtext ? ` · ${subtext}` : ""}`);
+		lines.push(`${section.title}: ${Math.floor(remaining)}% left${subtext ? ` · ${subtext}` : ""}`);
 	}
 	return lines.join("\n");
 }

@@ -261,7 +261,7 @@ export default function statusline(pi: ExtensionAPI): void {
 					const limits = visibleGroups(usage, model).flatMap((group) => group.parts.map((part) => {
 						const remaining = Math.max(0, 100 - part.used);
 						return (part.window === "weekly" ? color.weekly : color.session)(
-							`${part.label} [${renderBar(remaining)}] ${remaining}% remaining`,
+							`${part.label} [${renderBar(remaining)}] ${remaining}% left`,
 						);
 					}));
 					const line = [project.join(separator()), modelText, color.context(contextLeft(contextUsage, model?.contextWindow ?? 0)), ...limits].join(separator());
