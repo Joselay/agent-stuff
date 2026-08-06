@@ -1,17 +1,28 @@
 ---
 name: tmux
-description: "Tmux control loop for interactive REPLs, debuggers, and TTY programs; monitoring long-running commands; or reconnecting to existing sessions."
+description: "Tmux checkpoint loop for driving interactive REPLs, debuggers, and TTY applications; observing long-running commands; and reconnecting to live sessions."
 ---
 
 # tmux
 
-Run a one-pane **control loop**: select, expose, observe, send one input, then wait for fresh evidence.
+Drive one pane through a **checkpoint loop**:
 
-Resolve `<tmux-skill>` below to the absolute directory containing this file.
+> observe → predict → send once → wait for fresh evidence → observe
 
-## 1. Select one pane
+Resolve `<skill-dir>` to this file's directory. Keep the literal socket path, session name, and full `session:window.pane` target across tool calls; shell variables do not persist.
 
-Create an isolated server by default. Start the interactive program directly, making its prompt the first observable state:
+## Start or reconnect
+
+Reconnect when the requested program may already exist:
+
+```bash
+"<skill-dir>/scripts/find-sessions.sh" --all
+tmux -S '<socket>' list-panes -a \
+  -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'
+tmux -S '<socket>' capture-pane -p -J -t '<target>' -S -200
+```
+
+Otherwise create an isolated one-pane server. Replace the final command with the program itself so its initial screen is observable:
 
 ```bash
 SOCKET_DIR="${PI_TMUX_SOCKET_DIR:-/tmp/pi-tmux-$UID}"
@@ -27,80 +38,92 @@ tmux -S "$SOCKET" -f /dev/null new-session -d -s "$SESSION" -n main \
 printf 'SOCKET=%s\nSESSION=%s\nTARGET=%s\n' "$SOCKET" "$SESSION" "$TARGET"
 ```
 
-Replace the final command with the required interactive program. `remain-on-exit` preserves its final output if it exits quickly. `-f /dev/null` applies when creating the server; use the user's configuration only when the task depends on it. Record the printed literal values because shell variables do not persist across tool calls.
+Use `/dev/null` configuration for isolation; use the user's tmux configuration only when the task tests it. `remain-on-exit` preserves output from early failures.
 
-To reconnect, locate candidates:
+**Checkpoint:** `capture-pane` on one literal target shows the expected program, prompt, or preserved exit output.
 
-```bash
-"<tmux-skill>/scripts/find-sessions.sh" --all
-tmux -S '<socket>' list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'
-```
+## Expose
 
-`--all` checks the default socket, the current `$TMUX` socket, and managed sockets under `PI_TMUX_SOCKET_DIR`.
-
-Completion: one literal socket and full `session:window.pane` target are selected, and `capture-pane` shows the expected program or preserved final output.
-
-## 2. Expose the session
-
-Immediately give the user copy/paste commands containing literal values:
+Give the user literal copy/paste access before driving the program:
 
 ```text
-Monitor:
-  tmux -S '<socket>' attach-session -t '<session>'
-Snapshot:
-  tmux -S '<socket>' capture-pane -p -J -t '<target>' -S -200
-Detach with Ctrl+b d.
+Monitor:  tmux -S '<socket>' attach-session -t '<session>'
+Snapshot: tmux -S '<socket>' capture-pane -p -J -t '<target>' -S -200
+Detach:   Ctrl+b d
 ```
 
-Completion: the user has both commands before interactive work continues.
+**Checkpoint:** both monitor and snapshot commands identify the selected live session.
 
-## 3. Drive the control loop
+## Drive
 
-Observe first. Wait for a unique task-specific completion marker when possible; otherwise wait for a stable prompt:
+### Observe and predict
+
+Capture before every input:
 
 ```bash
-"<tmux-skill>/scripts/wait-for-text.sh" \
-  -S '<socket>' -t '<target>' -p '^>>>' -T 15 -l 4000
+tmux -S '<socket>' capture-pane -p -J -t '<target>' -S -200
 ```
 
-For repeated prompts and bounded output, count existing matching lines before sending and require one new line. Keep capture, send, and wait in one shell call so failure cannot be masked:
+Name the state expected after the next input: preferably a unique completion marker; otherwise a fresh prompt, output line, screen transition, or process exit. A visible prompt from before the input is stale evidence.
+
+### Send once and wait
+
+For a prompt that may already occur in history, count it before sending and wait for one additional occurrence. Keep baseline, input, wait, and final capture in one fail-fast shell call:
 
 ```bash
 set -euo pipefail
-SOCKET='<socket>'; TARGET='<target>'; WAIT='<tmux-skill>/scripts/wait-for-text.sh'
+SOCKET='<socket>'
+TARGET='<target>'
+WAIT='<skill-dir>/scripts/wait-for-text.sh'
+PATTERN='^>>>'
 PANE="$(tmux -S "$SOCKET" capture-pane -p -J -t "$TARGET" -S -4000)"
-SEEN="$(printf '%s\n' "$PANE" | awk '/^>>>/{n++} END{print n+0}')"
+SEEN="$(printf '%s\n' "$PANE" | grep -Ec -- "$PATTERN" || true)"
 tmux -S "$SOCKET" send-keys -t "$TARGET" -l -- '2 + 2'
 tmux -S "$SOCKET" send-keys -t "$TARGET" Enter
-"$WAIT" -S "$SOCKET" -t "$TARGET" -p '^>>>' -n "$((SEEN + 1))" -T 15 -l 4000
+"$WAIT" -S "$SOCKET" -t "$TARGET" -p "$PATTERN" \
+  -n "$((SEEN + 1))" -T 15 -l 4000
 tmux -S "$SOCKET" capture-pane -p -J -t "$TARGET" -S -200
 ```
 
-Send text with `-l --`; send Enter separately. Use key names such as `C-c`, `C-d`, `C-z`, or `Escape` only for control input. `tmux wait-for` synchronizes tmux events, not pane text.
+Send text with `-l --` and send `Enter` separately. Send key names such as `C-c`, `C-d`, `Escape`, or arrow keys only as deliberate control input.
 
-On timeout, use the helper's pane dump as the next observed state.
-
-Completion: every input is preceded by an observed state and followed by a new prompt, marker, or state change; the final capture contains the requested outcome.
-
-## 4. Finish
-
-Preserve the session when the user requested it or its program is still useful/running; report the monitor command and exact live state. Otherwise remove sessions created during this run:
+For a unique marker that cannot predate the input, wait directly:
 
 ```bash
-tmux -S "$SOCKET" kill-session -t "$SESSION"
-if tmux -S "$SOCKET" has-session -t "$SESSION" 2>/dev/null; then
-  echo "session still exists: $SESSION" >&2
+"<skill-dir>/scripts/wait-for-text.sh" \
+  -S '<socket>' -t '<target>' -p '<marker>' -T 30 -l 4000
+tmux -S '<socket>' capture-pane -p -J -t '<target>' -S -200
+```
+
+On timeout, treat the helper's pane dump as the next observed state. Diagnose that state before deciding whether to wait longer, interrupt, or send different input. Never retry the same input blindly.
+
+Repeat until the final capture contains the requested outcome. `tmux wait-for` coordinates tmux events, not pane output; use the helper for text checkpoints.
+
+**Checkpoint:** every input has one preceding observation and one fresh resulting state; the final state proves the task outcome.
+
+## Close or preserve
+
+Preserve a created session while its program remains useful or when the user requested continued access. Report its monitor command and exact current state.
+
+Otherwise remove only sessions created during this run:
+
+```bash
+tmux -S '<socket>' kill-session -t '<session>'
+if tmux -S '<socket>' has-session -t '<session>' 2>/dev/null; then
+  echo 'session still exists' >&2
   exit 1
 fi
 ```
 
-Leave pre-existing sessions running unless the user asked to terminate them.
+Leave pre-existing sessions alive unless the user explicitly requests termination.
 
-Completion: every created session is either intentionally live with a monitor command reported, or confirmed absent.
+**Checkpoint:** every created session is either reported live with a monitor command or confirmed absent.
 
-## Program notes
+## Program reference
 
-- **Python:** `PYTHON_BASIC_REPL=1 python3 -q`; prompt `^>>>`.
-- **Debuggers:** disable pagination, wait for the debugger prompt, use `C-c` to interrupt a running inferior, and confirm destructive commands.
+- **Python:** start with `PYTHON_BASIC_REPL=1 python3 -q`; checkpoint on `^>>>`.
+- **Debuggers:** disable pagination, checkpoint on the debugger prompt, observe before interrupting an inferior, and confirm destructive actions.
+- **Full-screen TUIs:** checkpoint on stable screen text or a deliberate state transition; capture after every key sequence.
+- **Long-running commands:** checkpoint on a task-specific marker. Preserve the session while work continues.
 
-Run either helper with `--help` for its authoritative options and defaults.
+Run either helper with `--help` for authoritative options and defaults.
