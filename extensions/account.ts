@@ -1,27 +1,21 @@
-import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OAuthAuth } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
+import type { OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, DynamicBorder, getAgentDir, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 const PROVIDER = "openai-codex";
 const AUTH_PATH = join(getAgentDir(), "auth.json");
 const VAULT_PATH = join(getAgentDir(), "codex-accounts.json");
-const LEGACY_STATE_PATH = join(getAgentDir(), "account.json");
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
-type Credential = {
-	type: "oauth";
-	access: string;
-	refresh: string;
-	expires: number;
-	accountId?: string;
-};
+type Credential = OAuthCredential & { accountId?: string };
 type Vault = { activeAccountId: string; accounts: Record<string, Credential> };
-type Claims = { accountId?: string; email?: string; name?: string; plan?: string };
+type Claims = { accountId?: string; email?: string; plan?: string };
 type UsageWindow = { used_percent?: number; limit_window_seconds?: number };
 type Usage = {
 	email?: string;
@@ -44,7 +38,6 @@ function claims(access: string): Claims {
 		return {
 			accountId: typeof auth?.chatgpt_account_id === "string" ? auth.chatgpt_account_id : undefined,
 			email: typeof profile?.email === "string" ? profile.email : undefined,
-			name: typeof profile?.name === "string" ? profile.name : undefined,
 			plan: typeof auth?.chatgpt_plan_type === "string" ? auth.chatgpt_plan_type : undefined,
 		};
 	} catch {
@@ -52,13 +45,9 @@ function claims(access: string): Claims {
 	}
 }
 
-function readCredentialFile(path: string): Credential | undefined {
-	try {
-		const json = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-		return isCredential(json[PROVIDER]) ? json[PROVIDER] : undefined;
-	} catch {
-		return undefined;
-	}
+function readActiveCredential(): Credential | undefined {
+	const credential = readStoredCredential(PROVIDER, AUTH_PATH);
+	return isCredential(credential) ? credential : undefined;
 }
 
 function readVault(): Vault | undefined {
@@ -76,10 +65,13 @@ function readVault(): Vault | undefined {
 }
 
 async function atomicJsonWrite(path: string, value: unknown): Promise<void> {
-	const temp = `${path}.${process.pid}.tmp`;
-	await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-	await chmod(temp, 0o600);
-	await rename(temp, path);
+	const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+		await rename(temp, path);
+	} finally {
+		await unlink(temp).catch(() => undefined);
+	}
 }
 
 async function writeActiveCredential(credential: Credential): Promise<void> {
@@ -94,40 +86,14 @@ async function writeActiveCredential(credential: Credential): Promise<void> {
 	await atomicJsonWrite(AUTH_PATH, { ...auth, [PROVIDER]: credential });
 }
 
-function legacyActiveName(): string | undefined {
-	try {
-		const value = JSON.parse(readFileSync(LEGACY_STATE_PATH, "utf8")) as { active?: unknown };
-		return typeof value.active === "string" ? value.active : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-async function migrateVault(): Promise<Vault> {
-	const existing = readVault();
-	if (existing) return existing;
-
-	const dir = getAgentDir();
-	const files = readdirSync(dir)
-		.filter((file) => file === "auth.json" || file.endsWith("-auth.json"))
-		.sort((a, b) => (a === "auth.json" ? -1 : b === "auth.json" ? 1 : a.localeCompare(b)));
-	const accounts: Record<string, Credential> = {};
-	const idsByLegacyName = new Map<string, string>();
-	for (const file of files) {
-		const credential = readCredentialFile(join(dir, file));
-		if (!credential) continue;
-		const accountId = claims(credential.access).accountId ?? credential.accountId;
-		if (!accountId) continue;
-		accounts[accountId] = credential;
-		idsByLegacyName.set(file === "auth.json" ? "auth" : file.slice(0, -"-auth.json".length), accountId);
-	}
-	const ids = Object.keys(accounts);
-	if (ids.length === 0) throw new Error("No OpenAI Codex credentials found");
-	const activeAccountId = idsByLegacyName.get(legacyActiveName() ?? "auth") ?? idsByLegacyName.get("auth") ?? ids[0]!;
-	const vault = { activeAccountId, accounts };
-	await atomicJsonWrite(VAULT_PATH, vault);
-	if (existsSync(LEGACY_STATE_PATH)) await unlink(LEGACY_STATE_PATH).catch(() => undefined);
-	return vault;
+async function createVault(): Promise<Vault> {
+	const credential = readActiveCredential();
+	if (!credential) throw new Error("Log in to OpenAI Codex with /login first");
+	const accountId = claims(credential.access).accountId ?? credential.accountId;
+	if (!accountId) throw new Error("OpenAI Codex credentials are invalid");
+	const created = { activeAccountId: accountId, accounts: { [accountId]: credential } };
+	await atomicJsonWrite(VAULT_PATH, created);
+	return created;
 }
 
 function planLabel(plan: string | undefined): string {
@@ -155,44 +121,88 @@ function snapshotDescription(snapshot: Snapshot): string {
 export default function accountExtension(pi: ExtensionAPI): void {
 	let vault: Vault | undefined = readVault();
 	let builtinOAuth: OAuthAuth | undefined;
-	let migration: Promise<Vault> | undefined;
+	let initialization: Promise<Vault> | undefined;
+	let vaultMutation = Promise.resolve();
+	const refreshes = new Map<string, Promise<Credential>>();
 
 	async function ensureVault(): Promise<Vault> {
+		const stored = readVault();
+		if (stored) {
+			vault = stored;
+			return stored;
+		}
 		if (vault) return vault;
-		migration ??= migrateVault();
-		vault = await migration;
-		return vault;
+		initialization ??= createVault();
+		try {
+			vault = await initialization;
+			return vault;
+		} catch (error) {
+			initialization = undefined;
+			throw error;
+		}
 	}
 
-	async function saveVault(next: Vault): Promise<void> {
-		await atomicJsonWrite(VAULT_PATH, next);
-		vault = next;
+	async function updateVault(update: (current: Vault) => Vault): Promise<Vault> {
+		const operation = vaultMutation.then(async () => {
+			const next = update(await ensureVault());
+			await atomicJsonWrite(VAULT_PATH, next);
+			vault = next;
+			return next;
+		});
+		vaultMutation = operation.then(() => undefined, () => undefined);
+		return operation;
 	}
 
 	async function syncCurrentLogin(): Promise<Vault> {
 		const current = await ensureVault();
-		const credential = readCredentialFile(AUTH_PATH);
+		const credential = readActiveCredential();
 		if (!credential) return current;
 		const accountId = claims(credential.access).accountId ?? credential.accountId;
 		if (!accountId) return current;
 		const stored = current.accounts[accountId];
 		const latest = stored && stored.expires > credential.expires ? stored : credential;
 		if (latest !== credential) await writeActiveCredential(latest);
-		const next = { activeAccountId: accountId, accounts: { ...current.accounts, [accountId]: latest } };
-		await saveVault(next);
-		return next;
+		if (
+			current.activeAccountId === accountId
+			&& stored
+			&& stored.access === latest.access
+			&& stored.refresh === latest.refresh
+			&& stored.expires === latest.expires
+		) return current;
+		return updateVault((newest) => {
+			const saved = newest.accounts[accountId];
+			const selected = saved && saved.expires > latest.expires ? saved : latest;
+			return { activeAccountId: accountId, accounts: { ...newest.accounts, [accountId]: selected } };
+		});
 	}
 
 	async function ensureFresh(accountId: string, credential: Credential, signal?: AbortSignal): Promise<Credential> {
 		const current = await ensureVault();
 		const latest = current.accounts[accountId] ?? credential;
 		if (latest.expires > Date.now() + REFRESH_MARGIN_MS) return latest;
-		const oauth = builtinOAuth;
-		if (!oauth) throw new Error("OpenAI Codex OAuth provider unavailable");
-		const refreshed = await oauth.refresh(latest, signal) as Credential;
-		const newest = await ensureVault();
-		await saveVault({ ...newest, accounts: { ...newest.accounts, [accountId]: refreshed } });
-		return refreshed;
+		const pending = refreshes.get(accountId);
+		if (pending) return pending;
+		const refresh = (async () => {
+			const oauth = builtinOAuth;
+			if (!oauth) throw new Error("OpenAI Codex OAuth provider unavailable");
+			const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+			const refreshSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+			const refreshed = await oauth.refresh(latest, refreshSignal) as Credential;
+			const refreshedAccountId = claims(refreshed.access).accountId ?? refreshed.accountId;
+			if (refreshedAccountId && refreshedAccountId !== accountId) throw new Error("refreshed token belongs to a different account");
+			const newest = await updateVault((currentVault) => {
+				const saved = currentVault.accounts[accountId];
+				const selected = saved && saved.expires > refreshed.expires ? saved : refreshed;
+				return { ...currentVault, accounts: { ...currentVault.accounts, [accountId]: selected } };
+			});
+			return newest.accounts[accountId]!;
+		})();
+		refreshes.set(accountId, refresh);
+		try {
+			return await refresh;
+		} finally {
+			if (refreshes.get(accountId) === refresh) refreshes.delete(accountId);
+		}
 	}
 
 	async function fetchUsage(accountId: string, credential: Credential, signal?: AbortSignal): Promise<Snapshot> {
@@ -215,8 +225,7 @@ export default function accountExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	async function choose(ctx: ExtensionCommandContext): Promise<string | undefined> {
-		const current = await syncCurrentLogin();
+	async function choose(ctx: ExtensionCommandContext, current: Vault): Promise<string | undefined> {
 		const entries = Object.entries(current.accounts);
 		if (ctx.mode !== "tui") return undefined;
 		const snapshots = await ctx.ui.custom<Snapshot[] | null>((tui, theme, _keys, done) => {
@@ -226,13 +235,15 @@ export default function accountExtension(pi: ExtensionAPI): void {
 			return loader;
 		});
 		if (!snapshots) return undefined;
-		return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+		return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
 			const items: SelectItem[] = snapshots.map((snapshot) => {
 				const email = snapshot.usage?.email ?? claims(snapshot.credential.access).email ?? snapshot.accountId;
 				return { value: snapshot.accountId, label: snapshot.accountId === current.activeAccountId ? `${email} (active)` : email, description: snapshotDescription(snapshot) };
 			});
 			const container = new Container();
-			container.addChild(new Text(theme.fg("accent", theme.bold("Switch Codex account")), 1, 0));
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			const title = new Text("", 1, 0);
+			container.addChild(title);
 			const list = new SelectList(items, Math.min(items.length, 10), {
 				selectedPrefix: (text) => theme.fg("accent", text), selectedText: (text) => theme.fg("accent", text),
 				description: (text) => theme.fg("muted", text), scrollInfo: (text) => theme.fg("dim", text), noMatch: (text) => theme.fg("warning", text),
@@ -240,12 +251,27 @@ export default function accountExtension(pi: ExtensionAPI): void {
 			list.onSelect = (item) => done(item.value);
 			list.onCancel = () => done(undefined);
 			container.addChild(list);
-			return { render: (width) => container.render(width), invalidate: () => container.invalidate(), handleInput: (data) => { list.handleInput(data); tui.requestRender(); } };
+			const help = new Text("", 1, 0);
+			container.addChild(help);
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			const updateDisplay = () => {
+				title.setText(theme.fg("accent", theme.bold("Switch Codex account")));
+				const up = keybindings.getKeys("tui.select.up").join("/");
+				const down = keybindings.getKeys("tui.select.down").join("/");
+				const confirm = keybindings.getKeys("tui.select.confirm").join("/");
+				const cancel = keybindings.getKeys("tui.select.cancel").join("/");
+				help.setText(theme.fg("dim", `${up}/${down} navigate · ${confirm} select · ${cancel} cancel`));
+			};
+			updateDisplay();
+			return {
+				render: (width) => container.render(width),
+				invalidate: () => { updateDisplay(); container.invalidate(); },
+				handleInput: (data) => { list.handleInput(data); tui.requestRender(); },
+			};
 		});
 	}
 
-	async function resolveAccount(query: string): Promise<string> {
-		const current = await ensureVault();
+	function resolveAccount(query: string, current: Vault): string {
 		const normalized = query.toLowerCase();
 		const matches = Object.entries(current.accounts).filter(([id, credential]) => {
 			const email = claims(credential.access).email?.toLowerCase();
@@ -262,7 +288,7 @@ export default function accountExtension(pi: ExtensionAPI): void {
 		if (!credential) throw new Error("Unknown Codex account");
 		const fresh = await ensureFresh(accountId, credential);
 		await writeActiveCredential(fresh);
-		await saveVault({ ...(await ensureVault()), activeAccountId: accountId });
+		await updateVault((newest) => ({ ...newest, activeAccountId: accountId }));
 		const email = claims(fresh.access).email ?? accountId.slice(0, 8);
 		pi.events.emit("codex:account-changed", { accountId, email });
 		pi.events.emit("codex:usage-changed", undefined);
@@ -283,12 +309,13 @@ export default function accountExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			try {
 				const query = args.trim();
-				await syncCurrentLogin();
-				const accountId = query ? await resolveAccount(query) : await choose(ctx);
+				const current = await syncCurrentLogin();
+				const accountId = query ? resolveAccount(query, current) : await choose(ctx, current);
 				if (accountId) await activate(accountId, ctx);
 				else if (ctx.mode !== "tui") {
 					const current = await ensureVault();
-					ctx.ui.notify(`Accounts: ${Object.values(current.accounts).map((credential) => claims(credential.access).email).filter(Boolean).join(", ")}`, "info");
+					const accounts = Object.entries(current.accounts).map(([id, credential]) => claims(credential.access).email ?? id);
+					ctx.ui.notify(`Accounts: ${accounts.join(", ")}`, "info");
 				}
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -299,6 +326,10 @@ export default function accountExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const builtin = ctx.modelRegistry.getProvider(PROVIDER);
 		builtinOAuth = builtin?.auth.oauth;
-		await syncCurrentLogin();
+		try {
+			await syncCurrentLogin();
+		} catch (error) {
+			if (ctx.hasUI) ctx.ui.notify(`Codex accounts: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
 	});
 }
