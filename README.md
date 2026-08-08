@@ -2,7 +2,7 @@
 
 My personal [Pi Coding Agent](https://pi.dev) package: reusable skills, extensions, prompt templates, and a theme used across projects.
 
-Most items are tuned for my workflow and environment, so expect to adjust paths, credentials, or defaults before reusing them elsewhere.
+Most items are tuned for my workflow and environment, so expect to adjust paths, credentials, or defaults before reusing them elsewhere. The structure is influenced by [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) (Apache-2.0), with only the specific ideas and conventions I found useful for my own workflow.
 
 ## Prompt Templates
 
@@ -79,3 +79,5 @@ Install as a Git-based Pi package:
 ```sh
 pi install git:github.com/Joselay/agent-stuff
 ```
+
+*Inspired by the structure and selected ideas from [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff).*
